@@ -1,0 +1,13 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+
+## Rider / VS Code
+.vs/
+.vscode/
+.idea/
+
+## Output artefacts
+vocab.bpe
