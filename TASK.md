@@ -85,9 +85,19 @@ Required by: TASK-008
   correctness tests (changing a future position's value must not change an
   earlier position's output; contrasted against non-causal where it does).
   Depends on: TASK-004
-- [ ] TASK-008: Full transformer block — multi-head attention, feed-forward
+- [x] TASK-008: Full transformer block — multi-head attention, feed-forward
   layer, layernorm, residual connections, assembled and unit-tested as one
-  block with a known input/output shape.
+  block with a known input/output shape. Done:
+  `src/Model/{LayerNorm,FeedForward,TransformerBlock}.cs`, GPT-2-style
+  pre-norm layout (normalise -> attend -> +residual -> normalise ->
+  feed-forward -> +residual). FeedForward expands to `4*embeddingDim`
+  hidden units by default (GPT-2's convention), ReLU in between (per
+  TASK-004's choice over GELU). Added `Tensor.Sqrt`/`Variable.Sqrt` to the
+  tensor engine for layernorm's variance normalisation. Tested end to end:
+  causal masking survives being wrapped in a full block, gradient checks
+  against a representative parameter in every sub-layer (not just one),
+  and a per-position-independence check for both layernorm and
+  feed-forward (no cross-position mixing outside of attention).
   Depends on: TASK-005, TASK-006, TASK-007
 
 ## Model assembly

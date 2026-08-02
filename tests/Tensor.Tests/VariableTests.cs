@@ -187,6 +187,22 @@ public class VariableTests
     }
 
     [Fact]
+    public void Sqrt_GradientMatchesFiniteDifference()
+    {
+        CheckGradient(vars => vars[0].Sqrt(), RandomVariable([2, 3], min: 0.5f, max: 4f));
+    }
+
+    [Fact]
+    public void Sqrt_MatchesMathSqrt()
+    {
+        var x = new Variable(Tensor.FromValues([4, 9, 16], [3]));
+
+        var y = x.Sqrt();
+
+        Assert.Equal(new float[] { 2, 3, 4 }, y.Value.ToArray());
+    }
+
+    [Fact]
     public void Log_GradientMatchesFiniteDifference()
     {
         CheckGradient(vars => vars[0].Log(), RandomVariable([2, 3], min: 0.5f, max: 3f));

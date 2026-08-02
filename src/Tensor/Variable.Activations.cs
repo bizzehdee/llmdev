@@ -30,6 +30,17 @@ public sealed partial class Variable
         }, this);
     }
 
+    public Variable Sqrt()
+    {
+        var value = Value.Sqrt();
+        return FromOp(value, result => () =>
+        {
+            // d/dx sqrt(x) = 1/(2*sqrt(x)) = 1/(2*result.Value).
+            var two = Tensor.FromValues([2f], [1]);
+            AccumulateGradient(result.Gradient.Divide(result.Value.Multiply(two)));
+        }, this);
+    }
+
     /// <summary>
     /// Softmax along <paramref name="axis"/>: exp(x) / sum(exp(x), axis).
     /// No max-subtraction numerical-stability trick (see Tensor.Reductions

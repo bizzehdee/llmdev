@@ -6,6 +6,7 @@ public sealed partial class Tensor
     public Tensor Exp() => ElementwiseUnary(MathF.Exp);
     public Tensor Log() => ElementwiseUnary(MathF.Log);
     public Tensor Relu() => ElementwiseUnary(static x => MathF.Max(0f, x));
+    public Tensor Sqrt() => ElementwiseUnary(MathF.Sqrt);
 
     /// <summary>1 where the input was positive, 0 elsewhere - the local
     /// derivative of <see cref="Relu"/>, factored out for autodiff's use.</summary>
