@@ -1,5 +1,11 @@
 # TASK.md
 
+Standing constraint on every task below (see PLAN.md "Memory constraint"):
+use disk as scratch space and minimise RAM usage for anything that scales
+with corpus/model/batch size. Prefer disk-backed/streamed structures over
+large heap allocations — this machine has OOM-killed itself on this project
+before. Flagged explicitly on the tasks it matters most for below.
+
 - [x] TASK-001: Byte-level BPE tokeniser (train, encode, decode, save/load)
 - [x] TASK-002: Directory input + disk-backed scratch for large corpora
 
@@ -8,7 +14,11 @@ Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
 
 - [ ] TASK-003: `Tensor` type — N-dimensional float array (shape, strides,
   indexing) with elementwise ops (add, subtract, multiply, divide) and
-  matmul, transpose, sum/mean-along-axis, broadcasting.
+  matmul, transpose, sum/mean-along-axis, broadcasting. Backing storage
+  should be swappable between an in-heap array (small tensors) and a
+  disk-backed store (large ones) so later tasks aren't locked into
+  unbounded heap growth — see `src/Tokeniser/MappedInt32Array.cs` for the
+  established pattern.
   Depends on: none
 - [ ] TASK-004: Reverse-mode autodiff — computation graph recording ops as
   they run, `Backward()` to propagate gradients, gradient accumulation.
@@ -46,14 +56,19 @@ Required by: TASK-008
 ## Training loop
 - [ ] TASK-010: Batching — turn a tokenised corpus (TASK-001/002 output)
   into fixed-length training batches (input/target pairs shifted by one
-  token) for next-token prediction.
+  token) for next-token prediction. Stream/index batches from the
+  disk-backed token store rather than loading the full tokenised corpus
+  into RAM at once.
   Depends on: TASK-002
 - [ ] TASK-011: Cross-entropy loss + optimizer (SGD first, then AdamW) built
   on the autodiff engine.
   Depends on: TASK-004
 - [ ] TASK-012: Training loop — wires TASK-009/010/011 together: forward
   pass, loss, backward pass, optimizer step, checkpointing (save/load model
-  weights), basic logging of loss over time.
+  weights), basic logging of loss over time. Checkpoints and optimizer
+  state (e.g. Adam's moment estimates, which double memory vs. the raw
+  weights) are candidates for disk-backed storage once model size makes
+  them non-trivial.
   Depends on: TASK-009, TASK-010, TASK-011
 
 ## Generation
