@@ -68,7 +68,22 @@ Required by: TASK-008
 ## Attention + transformer block
 Required by: TASK-008
 
-- [ ] TASK-007: Scaled dot-product attention + multi-head attention.
+- [x] TASK-007: Scaled dot-product attention + multi-head attention.
+  Done: `src/Model/ScaledDotProductAttention.cs` (parameter-free,
+  batched over any leading dims so it takes numHeads as a batch
+  dimension) and `src/Model/MultiHeadAttention.cs` (owns the Q/K/V/O
+  projection weights, splits into heads via `Reshape`+`Transpose`,
+  concatenates back). Includes causal masking (additive -infinity mask
+  before softmax) since the model this feeds is decoder-only/autoregressive
+  — without it, training would let a position "see" the token it's meant
+  to predict. No projection bias terms (kept to what's needed; feed-forward
+  in TASK-008 needs bias, attention doesn't strictly). Added
+  `Variable.Reshape` (mirrors `Tensor.Reshape`) to the autodiff engine to
+  support head-splitting. Tested via finite-difference gradient checks
+  (including against persistent weights already embedded in a module, a
+  different shape of check than TASK-004's) and explicit causal-masking
+  correctness tests (changing a future position's value must not change an
+  earlier position's output; contrasted against non-causal where it does).
   Depends on: TASK-004
 - [ ] TASK-008: Full transformer block — multi-head attention, feed-forward
   layer, layernorm, residual connections, assembled and unit-tested as one

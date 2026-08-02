@@ -146,6 +146,22 @@ public class VariableTests
     }
 
     [Fact]
+    public void Reshape_GradientMatchesFiniteDifference()
+    {
+        CheckGradient(vars => vars[0].Reshape([3, 2]), RandomVariable([2, 3]));
+    }
+
+    [Fact]
+    public void Reshape_PreservesValuesInRowMajorOrder()
+    {
+        var x = new Variable(Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]));
+
+        var y = x.Reshape([3, 2]);
+
+        Assert.Equal(new float[] { 1, 2, 3, 4, 5, 6 }, y.Value.ToArray());
+    }
+
+    [Fact]
     public void Sum_GradientMatchesFiniteDifference()
     {
         CheckGradient(vars => vars[0].Sum(axis: 1), RandomVariable([2, 3]));
