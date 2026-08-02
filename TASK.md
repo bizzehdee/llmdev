@@ -184,6 +184,7 @@ Required by: TASK-008
   measurably drops on a small repetitive corpus over 100 steps, not just
   a unit-level check of each piece in isolation.
   Depends on: TASK-009, TASK-010, TASK-011
+  Required by: TASK-014
 
 ## Generation
 - [x] TASK-013: Sampling — greedy, temperature, and top-k/top-p decoding
@@ -208,8 +209,61 @@ Required by: TASK-008
   the decoded output always starts with the decoded prompt exactly (true
   by construction, since decode is just concatenation in token order).
   Depends on: TASK-012
+  Required by: TASK-014
+
+## Interactive CLI
+Added after the original 7-stage plan, at the user's request (not part of
+TASK-001..013's original scope).
+
+- [ ] TASK-014: Interactive chat CLI — a console app that loads a saved
+  `ModelCheckpoint` and tokeniser vocab (`BpeTokeniser.Load`), then loops:
+  read a line of user input, generate a continuation via
+  `Generation.TextGenerator`, print it, repeat. Maintains conversation
+  state as a growing token-id sequence (not by re-encoding the whole
+  transcript as text each turn) so multi-turn context actually accumulates
+  correctly through `TextGenerator`'s existing sliding-window handling once
+  it exceeds `MaxSequenceLength`. Sampling parameters (temperature, top-k,
+  top-p, max new tokens per turn) configurable via CLI flags, matching the
+  existing Tokeniser CLI's `--flag value` style. An exit command (e.g.
+  `/exit` or Ctrl+C) to leave the loop.
+
+  Needs to be honest in its own UI text (not just PLAN.md) that this is a
+  raw next-token-prediction model, not an instruction-tuned assistant - it
+  will continue text in the style of whatever it was trained on, not
+  necessarily answer questions or follow instructions, unless the training
+  corpus was itself chat-shaped. Don't oversell "chatbot" in the CLI's own
+  banner/help text.
+  Depends on: TASK-012, TASK-013
+
+## Optional optimised math backend
+Added after the original 7-stage plan, at the user's request (not part of
+TASK-001..013's original scope). This is the one deliberate, narrowly-scoped
+exception to PLAN.md's "no libraries" rule - see PLAN.md stage 9 for why
+it's scoped the way it is before starting this task; several design
+questions there need answering as part of the work, not before it.
+
+- [ ] TASK-015: `--optimised` opt-in fast path for `Tensor`'s hot ops
+  (matmul first and foremost; elementwise ops as a stretch goal), backed by
+  Math.NET Numerics and/or `System.Numerics.Tensors`. Off by default - the
+  existing hand-written scalar implementation remains the default,
+  always-correct reference implementation, not something this task
+  replaces or deletes. Must keep the standing memory-discipline constraint
+  intact (PLAN.md): the optimised path most likely only applies to
+  heap-backed tensors (`HeapFloatBuffer`), since the library types involved
+  expect contiguous managed memory, not `MappedArray<T>`'s disk-backed
+  storage - large disk-backed tensors should keep using the scalar path,
+  or an explicitly-scoped chunked approach if one is worked out, not
+  silently lose their memory-safety guarantees. Needs a way to select the
+  backend process-wide (e.g. from a CLI flag down into `Tensor`) without
+  adding a parameter to every op's call site. Correctness must be
+  demonstrated by running the *existing* test suite - including the
+  finite-difference gradient checks in `Tensor.Tests`/`Model.Tests` - against
+  both backends and getting equivalent results, not a separate smaller
+  test suite scoped to just the fast path.
+  Depends on: TASK-003
 
 ## Notes
-- Tasks are scoped for hand-rolled, no-library implementation per PLAN.md.
+- Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
+  except TASK-015, which is an explicit, narrowly-scoped, opt-in exception.
 - Work through tasks one at a time in order; ambiguities get clarified
   before implementation starts on that task, not up front for all of them.

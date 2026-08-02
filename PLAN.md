@@ -5,24 +5,33 @@ Scope grew past the original <2hr lightweight tokeniser exercise into a full
 tasks in TASK.md from this point on.
 
 ## Approach
-First-principles implementation, all the way down. No ML/tokeniser/tensor
-libraries (no PyTorch, tiktoken, SentencePiece, HuggingFace, ML.NET,
-Math.NET, System.Numerics.Tensors, etc.). Tokenisation, tensor math,
-autodiff, attention, and the training loop are all written by hand in plain
-C# so every gradient and every mechanism is visible and understood, not a
-black box behind a library call. This is a deliberate, explicit trade-off:
-slower to reach a working model, but the whole point of the project is
-understanding the mechanics, not shipping a model quickly.
+First-principles implementation, all the way down, **by default**. No
+ML/tokeniser/tensor libraries (no PyTorch, tiktoken, SentencePiece,
+HuggingFace, ML.NET, Math.NET, System.Numerics.Tensors, etc.). Tokenisation,
+tensor math, autodiff, attention, and the training loop are all written by
+hand in plain C# so every gradient and every mechanism is visible and
+understood, not a black box behind a library call. This is a deliberate,
+explicit trade-off: slower to reach a working model, but the whole point of
+the project is understanding the mechanics, not shipping a model quickly.
+
+**One explicit, opt-in exception (stage 9 / TASK-015):** an optional
+library-backed fast path for the tensor engine's hot ops, off by default,
+enabled only via an explicit flag. The hand-written scalar implementation
+stays the real, default, always-correct reference; the fast path is a
+strictly optional accelerant for anyone who wants to actually run a
+larger training job on this hardware, not a replacement for the
+first-principles version or a quiet erosion of the "no libraries" rule.
+See stage 9 below for why this is scoped as narrowly as it is.
 
 ## Goal
 Learn how LLMs work by building one end-to-end: tokeniser → tensors/autodiff
 → embeddings → attention/transformer → training loop → text generation.
 
-**All 7 stages are done (TASK-001 through TASK-013 in TASK.md).** The
-project can train a small GPT-style model from scratch on a text corpus and
-generate text from it, entirely from first principles. What's left is
-tuning/scaling up an actual training run and addressing the deferred items
-below, not new architecture.
+**The original 7 stages are done (TASK-001 through TASK-013 in TASK.md).**
+The project can train a small GPT-style model from scratch on a text corpus
+and generate text from it, entirely from first principles. Stage 8
+(interactive CLI) is a scope addition on top of that original plan — see
+below.
 
 ## Memory constraint (standing, applies to every stage)
 This machine runs with little RAM to spare (earlier tokeniser work OOM-killed
@@ -77,6 +86,58 @@ rather than assuming it fits in RAM:
    `src/Training/`.
 7. **Generation (done)** — greedy, temperature, and top-k/top-p sampling to
    actually produce text from a trained model. See `src/Generation/`.
+8. **Interactive CLI ("chat")** — a console app that loads a saved
+   `ModelCheckpoint` + tokeniser vocab and lets the user converse with the
+   model turn-by-turn interactively, instead of only being usable via a
+   one-off code snippet (README's "Full workflow" section). Added after
+   the original 7-stage plan, at the user's request.
+
+   **Honest expectation-setting, not a limitation to fix later:** this
+   model is trained by plain next-token prediction on raw text, not on
+   chat-formatted/instruction data with turn markers or roles. A CLI loop
+   makes it *usable* conversationally (keeps a running token context across
+   turns, doesn't require re-invoking a program per message), but it won't
+   make the model behave like an instruction-following assistant unless the
+   corpus it was trained on was itself shaped like dialogue. Worth being
+   upfront about in the CLI's own `--help`/README text, not just here.
+9. **Optional optimised math backend (`--optimised`)** — an opt-in fast
+   path for `Tensor`'s hot ops (matmul above all; possibly elementwise ops
+   too) backed by Math.NET Numerics and/or `System.Numerics.Tensors`,
+   selected by an explicit flag (default: off, i.e. the existing
+   hand-written scalar path). Added after the original 7-stage plan, at
+   the user's request, alongside stage 8.
+
+   **Why this is scoped narrowly, and the open design questions a real
+   implementation needs to resolve:**
+   - The standing memory-discipline constraint (PLAN.md, above) still
+     applies regardless of backend. `Tensor` already separates storage
+     (`IFloatBuffer`: heap vs disk-backed `MappedArray<T>`) from compute;
+     a library-backed compute path most likely only benefits heap-backed
+     tensors, since Math.NET/`System.Numerics.Tensors` types expect
+     contiguous managed memory, not our disk-backed buffer abstraction.
+     Whether/how a large disk-backed tensor could still get *any* benefit
+     (e.g. computing over bounded chunks) is an open question, not a given.
+   - `System.Numerics.Tensors` ships in the .NET BCL (no NuGet needed);
+     Math.NET Numerics is a real external package. "No libraries" was
+     never really about install friction - it's about not hiding the
+     mechanics behind someone else's code. An opt-in flag keeps that
+     distinction honest: the default experience is still 100%
+     first-principles; `--optimised` is a clearly-labelled, deliberate
+     exception someone reaches for, not a silent swap.
+   - Needs a way to thread the choice from a CLI flag down to `Tensor`
+     construction/ops without polluting every call site - likely a
+     process-wide switch set once at startup (e.g. a static
+     `Tensor.Backend` or similar), not a parameter added to every op.
+   - Correctness: the optimised path must be verified to produce results
+     equivalent (within float tolerance) to the existing scalar path -
+     the natural way to prove this is running the *same* test suite
+     (including the finite-difference gradient checks) against both
+     backends, not writing a separate, smaller test suite for the fast
+     path.
+   - Priority: matmul is the dominant cost in a transformer forward/backward
+     pass (O(n³) vs elementwise ops' O(n)), so it's the one actually worth
+     optimising first; elementwise ops are a "nice to have" stretch goal on
+     top, not required for the flag to be worth having at all.
 
 ## Known limitations / deferred (not bugs - documented trade-offs)
 Flagged individually in TASK.md as each was made; collected here for a
