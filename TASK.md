@@ -24,10 +24,17 @@ Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
   produce heap-backed results for now — routing large op results to disk
   is left to whichever later task first needs it.
   Depends on: none
-- [ ] TASK-004: Reverse-mode autodiff — computation graph recording ops as
+- [x] TASK-004: Reverse-mode autodiff — computation graph recording ops as
   they run, `Backward()` to propagate gradients, gradient accumulation.
   Covers the ops from TASK-003 plus softmax, exp/log, and the activation
-  functions transformer blocks need (GELU or ReLU).
+  functions transformer blocks need (GELU or ReLU). Done: `src/Tensor/Variable*.cs`
+  — chose ReLU over GELU (PLAN.md's "either" framing) to keep the backward
+  math simple; softmax has no max-subtraction stability trick yet (no
+  max-along-axis reduction in Tensor), noted as a revisit candidate if large
+  logits cause overflow. Tested via finite-difference gradient checking
+  (`tests/Tensor.Tests/VariableTests.cs`) rather than hand-derived expected
+  values, plus explicit tests for gradient accumulation (a variable used
+  twice, and a diamond dependency).
   Depends on: TASK-003
 
 ## Embeddings

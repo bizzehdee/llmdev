@@ -279,4 +279,113 @@ public class TensorTests
 
         Assert.Equal(new float[] { 2, 4, 6, 8 }, result.ToArray());
     }
+
+    [Fact]
+    public void Reshape_PreservesDataInRowMajorOrder()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var result = t.Reshape([3, 2]);
+
+        Assert.Equal(new[] { 3, 2 }, result.Shape);
+        Assert.Equal(new float[] { 1, 2, 3, 4, 5, 6 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Reshape_WrongElementCountThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentException>(() => t.Reshape([4, 2]));
+    }
+
+    [Fact]
+    public void SumTo_ReducesExtraLeadingDimensions()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var result = t.SumTo([3]);
+
+        Assert.Equal(new[] { 3 }, result.Shape);
+        Assert.Equal(new float[] { 5, 7, 9 }, result.ToArray());
+    }
+
+    [Fact]
+    public void SumTo_ReducesBroadcastSizeOneDimensions()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var result = t.SumTo([2, 1]);
+
+        Assert.Equal(new[] { 2, 1 }, result.Shape);
+        Assert.Equal(new float[] { 6, 15 }, result.ToArray());
+    }
+
+    [Fact]
+    public void SumTo_MatchingShapeIsUnchanged()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        using var result = t.SumTo([2, 2]);
+
+        Assert.Equal(t.ToArray(), result.ToArray());
+    }
+
+    [Fact]
+    public void Negate_FlipsSign()
+    {
+        using var t = Tensor.FromValues([1, -2, 3], [3]);
+
+        using var result = t.Negate();
+
+        Assert.Equal(new float[] { -1, 2, -3 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Exp_MatchesMathExp()
+    {
+        using var t = Tensor.FromValues([0, 1, 2], [3]);
+
+        using var result = t.Exp();
+
+        Assert.Equal(new[] { 1f, MathF.E, MathF.E * MathF.E }, result.ToArray(), EqualityComparer());
+    }
+
+    [Fact]
+    public void Log_IsInverseOfExp()
+    {
+        using var t = Tensor.FromValues([1, 2, 3], [3]);
+
+        using var result = t.Exp().Log();
+
+        Assert.Equal(t.ToArray(), result.ToArray(), EqualityComparer());
+    }
+
+    [Fact]
+    public void Relu_ZeroesNegativesAndPassesPositivesThrough()
+    {
+        using var t = Tensor.FromValues([-2, -0.5f, 0, 1, 3], [5]);
+
+        using var result = t.Relu();
+
+        Assert.Equal(new float[] { 0, 0, 0, 1, 3 }, result.ToArray());
+    }
+
+    [Fact]
+    public void ReluMask_IsOneWherePositiveElseZero()
+    {
+        using var t = Tensor.FromValues([-2, 0, 3], [3]);
+
+        using var result = t.ReluMask();
+
+        Assert.Equal(new float[] { 0, 0, 1 }, result.ToArray());
+    }
+
+    private static IEqualityComparer<float> EqualityComparer() => new ApproximateFloatComparer(1e-5f);
+
+    private sealed class ApproximateFloatComparer(float tolerance) : IEqualityComparer<float>
+    {
+        public bool Equals(float x, float y) => MathF.Abs(x - y) <= tolerance;
+        public int GetHashCode(float obj) => 0;
+    }
 }
