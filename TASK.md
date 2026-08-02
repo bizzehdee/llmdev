@@ -51,9 +51,18 @@ Required by: TASK-008
   scale) via a hand-rolled Box-Muller transform, not zeros — identical
   rows would otherwise get identical gradients forever.
   Depends on: TASK-004
-- [ ] TASK-006: Positional encoding — learned positional embeddings added to
+- [x] TASK-006: Positional encoding — learned positional embeddings added to
   token embeddings (start with learned rather than sinusoidal/RoPE: fewer
-  moving parts for a first pass).
+  moving parts for a first pass). Done: `src/Model/PositionalEmbedding.cs`
+  — same shape as `TokenEmbedding` (a `[maxSequenceLength, embeddingDim]`
+  trainable table, looked up via the same `GatherRows` op), sized to a max
+  sequence length rather than generalising to arbitrary lengths like
+  sinusoidal/RoPE would. Shared the Gaussian weight-init logic with
+  `TokenEmbedding` via a new `GaussianInit` helper instead of duplicating
+  it. Composition with `TokenEmbedding` (plain elementwise `Add`, both
+  produce `[sequenceLength, embeddingDim]`) is covered by tests but not
+  wrapped in its own class yet - left for whichever later task first
+  assembles a full embedding layer.
   Depends on: TASK-004
 
 ## Attention + transformer block
