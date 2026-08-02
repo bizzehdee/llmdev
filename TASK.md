@@ -442,6 +442,22 @@ Added at the user's request.
   as if they already work.
   Depends on: TASK-013
 
+## Test coverage
+Added at the user's request alongside AGENTS.md, which sets the 90%
+branch-coverage bar this task exists to reach.
+
+- [ ] TASK-024: Raise branch coverage to >=90% across every test project.
+  Measured (`dotnet test --collect:"XPlat Code Coverage"`) at ~57–85%
+  across the five test projects as of AGENTS.md being written -
+  `Generation.Tests` (~57%) and `Tokeniser.Tests` (~60%) are furthest
+  below the bar, `Tensor.Tests` (~85%) closest. Prioritise tests that
+  verify actual correctness (exact expected values, round-trips,
+  finite-difference gradient checks) over coverage-only smoke tests, per
+  AGENTS.md's testing section - the bar is a floor to catch untested
+  branches, not the goal in itself. Re-measure per project rather than
+  assuming a single fix closes the gap everywhere.
+  Depends on: none
+
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
   except TASK-015, which is an explicit, narrowly-scoped, opt-in exception.

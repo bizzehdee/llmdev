@@ -3,6 +3,7 @@ bin/
 obj/
 *.user
 *.suo
+TestResults/
 
 ## Rider / VS Code
 .vs/
