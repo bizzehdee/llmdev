@@ -40,8 +40,16 @@ Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
 ## Embeddings
 Required by: TASK-008
 
-- [ ] TASK-005: Token embedding table — learned lookup from token id to a
+- [x] TASK-005: Token embedding table — learned lookup from token id to a
   dense vector, backed by `Tensor`, trainable via the autodiff engine.
+  Done: `src/Model/TokenEmbedding.cs`, on a new differentiable
+  `Tensor.GatherRows`/`ScatterAddRows` pair (`Variable.GatherRows`) added
+  to the tensor engine for this — row lookup with gradient accumulation on
+  repeated indices, which is what makes a token appearing twice in one
+  sequence get the sum of both occurrences' gradients rather than losing
+  one. Weights init as small Gaussian noise (mean 0, std 0.02, GPT-2's
+  scale) via a hand-rolled Box-Muller transform, not zeros — identical
+  rows would otherwise get identical gradients forever.
   Depends on: TASK-004
 - [ ] TASK-006: Positional encoding — learned positional embeddings added to
   token embeddings (start with learned rather than sinusoidal/RoPE: fewer

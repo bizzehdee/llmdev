@@ -214,6 +214,25 @@ public class VariableTests
             RandomVariable([4], min: 0.5f, max: 2f));
     }
 
+    [Fact]
+    public void GatherRows_GradientMatchesFiniteDifference()
+    {
+        CheckGradient(vars => vars[0].GatherRows([2, 0]), RandomVariable([3, 2]));
+    }
+
+    [Fact]
+    public void GatherRows_RepeatedIndex_AccumulatesGradientForThatRow()
+    {
+        // Row 0 is looked up twice, so its gradient should be the sum of
+        // both occurrences' upstream gradients, not just the last one.
+        var weights = new Variable(Tensor.FromValues([1, 2, 3, 4], [2, 2]));
+
+        var looked = weights.GatherRows([0, 0]);
+        looked.Backward();
+
+        Assert.Equal(new float[] { 2, 2, 0, 0 }, weights.Gradient.ToArray());
+    }
+
     private static readonly Random Rng = new(1234);
 
     private static Variable RandomVariable(int[] shape, float min = -3f, float max = 3f)

@@ -381,6 +381,51 @@ public class TensorTests
         Assert.Equal(new float[] { 0, 0, 1 }, result.ToArray());
     }
 
+    [Fact]
+    public void GatherRows_SelectsRowsByIndex()
+    {
+        using var t = Tensor.FromValues([1, 2, 10, 20, 100, 200], [3, 2]);
+
+        using var result = t.GatherRows([2, 0, 0]);
+
+        Assert.Equal(new[] { 3, 2 }, result.Shape);
+        Assert.Equal(new float[] { 100, 200, 1, 2, 1, 2 }, result.ToArray());
+    }
+
+    [Fact]
+    public void GatherRows_OutOfRangeIndexThrows()
+    {
+        using var t = Tensor.Zeros([3, 2]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => t.GatherRows([5]));
+    }
+
+    [Fact]
+    public void ScatterAddRows_AccumulatesRepeatedIndices()
+    {
+        using var grad = Tensor.FromValues([1, 1, 2, 2, 3, 3], [3, 2]);
+
+        // Rows 0 and 2 both scatter to target row 0; row 1 scatters to target row 1.
+        using var result = grad.ScatterAddRows([0, 1, 0], targetRowCount: 2);
+
+        Assert.Equal(new[] { 2, 2 }, result.Shape);
+        Assert.Equal(new float[] { 4, 4, 2, 2 }, result.ToArray());
+    }
+
+    [Fact]
+    public void ScatterAddRows_IsGatherRowsAdjoint()
+    {
+        // Sanity check the pairing: gathering then scattering back with the
+        // same indices onto a zero tensor of the original row count should
+        // reproduce the gathered rows added into their original positions.
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [3, 2]);
+
+        using var gathered = t.GatherRows([1, 2]);
+        using var scattered = gathered.ScatterAddRows([1, 2], targetRowCount: 3);
+
+        Assert.Equal(new float[] { 0, 0, 3, 4, 5, 6 }, scattered.ToArray());
+    }
+
     private static IEqualityComparer<float> EqualityComparer() => new ApproximateFloatComparer(1e-5f);
 
     private sealed class ApproximateFloatComparer(float tolerance) : IEqualityComparer<float>

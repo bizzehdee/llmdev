@@ -65,6 +65,8 @@ dotnet test
 - `src/Tokeniser/BpeTokeniser.cs` — the tokeniser itself (training, encode, decode, save/load).
 - `src/Tokeniser/Program.cs` — command-line entry point.
 - `src/Common/MappedArray.cs` — disk-backed (memory-mapped) array type shared by the tokeniser and the tensor engine.
-- `src/Tensor/` — the N-dimensional `Tensor` type (see PLAN.md/TASK.md).
+- `src/Tensor/` — the N-dimensional `Tensor` type and the `Variable` reverse-mode autodiff engine built on it (see PLAN.md/TASK.md).
+- `src/Model/` — learned model components built on `Tensor`/`Variable` (currently: token embeddings).
 - `tests/Tokeniser.Tests/` — xUnit tests covering training, roundtrip encode/decode, and save/load.
-- `tests/Tensor.Tests/` — xUnit tests covering tensor construction, elementwise ops, broadcasting, matmul, transpose, and reductions.
+- `tests/Tensor.Tests/` — xUnit tests covering tensor construction, elementwise ops, broadcasting, matmul, transpose, reductions, and autodiff (finite-difference gradient checks).
+- `tests/Model.Tests/` — xUnit tests covering model components (currently: token embeddings).
