@@ -29,50 +29,211 @@ public sealed class BpeTokeniser
     /// <paramref name="targetVocabSize"/> is reached or no pair occurs more
     /// than once.
     /// </summary>
-    public void Train(IEnumerable<string> filePaths, int targetVocabSize)
+    /// <remarks>
+    /// Rather than rescanning the whole corpus on every merge (O(corpus size)
+    /// per merge, hopeless past a few MB), tokens are held in a doubly linked
+    /// list per source file (see <see cref="LinkedTokenStream"/>) and pair
+    /// counts are updated incrementally: a merge only touches the positions
+    /// where that exact pair occurs plus their immediate neighbours. A
+    /// priority queue tracks the current best pair; stale entries (counts
+    /// that changed after being enqueued) are detected on pop by comparing
+    /// against the live count and discarded.
+    ///
+    /// Two things keep this from blowing up on a large corpus:
+    ///
+    /// 1. Memory for the corpus itself lives in memory-mapped scratch files
+    ///    (<see cref="MappedInt32Array"/>), not the managed heap. The OS can
+    ///    reclaim those pages directly (drop clean ones, write back dirty
+    ///    ones) instead of only being able to page a plain array out to
+    ///    swap - which is what exhausted this machine's RAM the first time
+    ///    round.
+    /// 2. Rather than a `Dictionary<pair, List<int>>` of occurrence
+    ///    positions (a separate heap-allocated list per distinct pair, the
+    ///    original source of the memory blowup), each pair's occurrences
+    ///    are threaded through an *intrusive* singly linked list embedded in
+    ///    a second mapped array (<c>PairNext</c>): `pairHead[pair]` is the
+    ///    most recent position registered for that pair, and
+    ///    `PairNext[position]` chains to the previous one. No collection
+    ///    object per pair, so the only heap memory left is `pairHead` /
+    ///    `pairCounts` / the priority queue, all bounded by the number of
+    ///    *distinct* pairs, not the number of occurrences.
+    /// </remarks>
+    public void Train(IEnumerable<string> filePaths, int targetVocabSize, string scratchDirectory, Action<int, int>? onMerge = null)
     {
         if (targetVocabSize < 256)
         {
             throw new ArgumentOutOfRangeException(nameof(targetVocabSize), "Target vocab size must be at least 256 (the base byte vocabulary).");
         }
 
-        var sequences = filePaths
-            .Select(path => File.ReadAllBytes(path).Select(b => (int)b).ToList())
-            .Where(seq => seq.Count > 1)
-            .ToList();
+        using var state = LinkedTokenStream.Build(filePaths, scratchDirectory);
+        var pairCounts = new Dictionary<(int Left, int Right), long>();
+        var pairHead = new Dictionary<(int Left, int Right), int>();
+        var heap = new PriorityQueue<(int Left, int Right), (long NegCount, int Left, int Right)>();
+
+        // Pairs touched during the round in progress, flushed to the heap
+        // once each at the end of the round rather than on every individual
+        // count change. A common pair (e.g. a frequent English digraph) can
+        // have millions of occurrences; pushing one heap entry per
+        // occurrence rather than per *distinct* pair is what actually
+        // exhausted RAM the first time this ran against a real corpus
+        // (confirmed via dmesg: OOM-killed at ~6GB of heap entries). The
+        // pairs actually touched by a round are bounded by current vocab
+        // size (every new pair involves the just-created token id), so
+        // deferring to a per-pair flush keeps this to a few thousand
+        // entries per round regardless of how many occurrences it processed.
+        var dirtyPairs = new HashSet<(int Left, int Right)>();
+
+        void LinkOccurrence(int leftIndex, (int Left, int Right) pair)
+        {
+            int previousHead = pairHead.TryGetValue(pair, out int h) ? h : -1;
+            state.PairNext[leftIndex] = previousHead;
+            pairHead[pair] = leftIndex;
+        }
+
+        void AdjustCount((int Left, int Right) pair, long delta)
+        {
+            pairCounts[pair] = pairCounts.GetValueOrDefault(pair) + delta;
+            dirtyPairs.Add(pair);
+        }
+
+        void FlushDirtyPairsToHeap()
+        {
+            foreach (var pair in dirtyPairs)
+            {
+                long count = pairCounts.GetValueOrDefault(pair);
+                heap.Enqueue(pair, (-count, pair.Left, pair.Right));
+            }
+            dirtyPairs.Clear();
+        }
+
+        void AddPairAt(int leftIndex)
+        {
+            int rightIndex = state.Next[leftIndex];
+            if (rightIndex == -1)
+            {
+                return;
+            }
+
+            var pair = (state.Token[leftIndex], state.Token[rightIndex]);
+            LinkOccurrence(leftIndex, pair);
+            AdjustCount(pair, 1);
+        }
+
+        // Initial scan: only build counts + occurrence chains here. Heap
+        // population happens afterwards, once per distinct pair, instead of
+        // once per occurrence (which for a large corpus is the difference
+        // between a few hundred thousand heap entries and tens of millions).
+        for (int i = 0; i < state.Length; i++)
+        {
+            int j = state.Next[i];
+            if (j == -1)
+            {
+                continue;
+            }
+
+            var pair = (state.Token[i], state.Token[j]);
+            LinkOccurrence(i, pair);
+            pairCounts[pair] = pairCounts.GetValueOrDefault(pair) + 1;
+        }
+
+        foreach (var (pair, count) in pairCounts)
+        {
+            heap.Enqueue(pair, (-count, pair.Left, pair.Right));
+        }
 
         int nextId = 256;
 
         while (_vocab.Count < targetVocabSize)
         {
-            var pairCounts = CountPairs(sequences);
-            if (pairCounts.Count == 0)
+            (int Left, int Right) pair;
+            long actualCount;
+            while (true)
+            {
+                if (!heap.TryDequeue(out pair, out var priority))
+                {
+                    actualCount = 0;
+                    break;
+                }
+
+                actualCount = pairCounts.GetValueOrDefault(pair);
+                if (actualCount == -priority.NegCount && actualCount > 0)
+                {
+                    break;
+                }
+            }
+
+            if (actualCount < 2)
             {
                 break;
             }
 
-            var best = pairCounts
-                .OrderByDescending(kv => kv.Value)
-                .ThenBy(kv => kv.Key.Left)
-                .ThenBy(kv => kv.Key.Right)
-                .First();
-
-            if (best.Value < 2)
-            {
-                break;
-            }
-
-            var pair = best.Key;
             int newId = nextId++;
-
             _vocab[newId] = Combine(_vocab[pair.Left], _vocab[pair.Right]);
             _mergeRank[pair] = _merges.Count;
             _merges.Add((pair.Left, pair.Right, newId));
+            onMerge?.Invoke(_vocab.Count, targetVocabSize);
 
-            foreach (var seq in sequences)
+            // Collect the full occurrence chain before merging anything.
+            // Processing a node can overwrite *other* nodes' PairNext slot
+            // (any position can only ever be mid-chain for one pair at a
+            // time, and a merge changes what pair a neighbouring position
+            // represents) - walking and mutating in the same pass would risk
+            // severing the chain before every original occurrence is
+            // reached. Collecting first also naturally excludes occurrences
+            // *created* by this same merge round (e.g. "aaaa" -> merging
+            // (a,a) creates a new (a,a) at the splice point): those get
+            // linked onto a new head that this snapshot never sees, so
+            // they're correctly left for a later round.
+            var occurrences = new List<int>();
+            int node = pairHead.TryGetValue(pair, out int headNode) ? headNode : -1;
+            while (node != -1)
             {
-                MergePairInPlace(seq, pair, newId);
+                occurrences.Add(node);
+                node = state.PairNext[node];
             }
+
+            foreach (int i in occurrences)
+            {
+                if (state.Token[i] != pair.Left)
+                {
+                    continue;
+                }
+
+                int j = state.Next[i];
+                if (j == -1 || state.Token[j] != pair.Right)
+                {
+                    continue;
+                }
+
+                int p = state.Prev[i];
+                int k = state.Next[j];
+
+                if (p != -1)
+                {
+                    AdjustCount((state.Token[p], state.Token[i]), -1);
+                }
+                AdjustCount(pair, -1);
+                if (k != -1)
+                {
+                    AdjustCount((state.Token[j], state.Token[k]), -1);
+                }
+
+                state.Token[i] = newId;
+                state.Token[j] = -1;
+                state.Next[i] = k;
+                if (k != -1)
+                {
+                    state.Prev[k] = i;
+                }
+
+                if (p != -1)
+                {
+                    AddPairAt(p);
+                }
+                AddPairAt(i);
+            }
+
+            FlushDirtyPairsToHeap();
         }
     }
 
@@ -84,37 +245,62 @@ public sealed class BpeTokeniser
         return result;
     }
 
-    private static Dictionary<(int Left, int Right), int> CountPairs(List<List<int>> sequences)
+    /// <summary>
+    /// Holds every input document's bytes as one big doubly linked list
+    /// (via index arrays) so merges can splice out a node in O(1) without
+    /// shifting or copying the rest of the corpus. -1 means "no neighbour"
+    /// (a tombstoned node, or the start/end of a document). <c>PairNext</c>
+    /// is a second, separate linked structure threading together every
+    /// position that currently represents the same adjacent pair (see the
+    /// remarks on <see cref="Train"/>); it has nothing to do with document
+    /// order. All four arrays are memory-mapped scratch files rather than
+    /// managed arrays, since together they scale with corpus size and are
+    /// the main thing that needs to stay off the process heap.
+    /// </summary>
+    private sealed class LinkedTokenStream : IDisposable
     {
-        var counts = new Dictionary<(int Left, int Right), int>();
-        foreach (var seq in sequences)
-        {
-            for (int i = 0; i < seq.Count - 1; i++)
-            {
-                var pair = (seq[i], seq[i + 1]);
-                counts[pair] = counts.GetValueOrDefault(pair) + 1;
-            }
-        }
-        return counts;
-    }
+        public required MappedInt32Array Token;
+        public required MappedInt32Array Next;
+        public required MappedInt32Array Prev;
+        public required MappedInt32Array PairNext;
+        public required int Length;
 
-    private static void MergePairInPlace(List<int> seq, (int Left, int Right) pair, int newId)
-    {
-        int write = 0;
-        int read = 0;
-        while (read < seq.Count)
+        public static LinkedTokenStream Build(IEnumerable<string> filePaths, string scratchDirectory)
         {
-            if (read < seq.Count - 1 && seq[read] == pair.Left && seq[read + 1] == pair.Right)
+            var documents = filePaths
+                .Select(File.ReadAllBytes)
+                .Where(bytes => bytes.Length > 1)
+                .ToList();
+
+            int total = documents.Sum(d => d.Length);
+            var token = new MappedInt32Array(total, scratchDirectory);
+            var next = new MappedInt32Array(total, scratchDirectory);
+            var prev = new MappedInt32Array(total, scratchDirectory);
+            var pairNext = new MappedInt32Array(total, scratchDirectory);
+
+            int offset = 0;
+            foreach (var doc in documents)
             {
-                seq[write++] = newId;
-                read += 2;
+                for (int i = 0; i < doc.Length; i++)
+                {
+                    int index = offset + i;
+                    token[index] = doc[i];
+                    prev[index] = i == 0 ? -1 : index - 1;
+                    next[index] = i == doc.Length - 1 ? -1 : index + 1;
+                }
+                offset += doc.Length;
             }
-            else
-            {
-                seq[write++] = seq[read++];
-            }
+
+            return new LinkedTokenStream { Token = token, Next = next, Prev = prev, PairNext = pairNext, Length = total };
         }
-        seq.RemoveRange(write, seq.Count - write);
+
+        public void Dispose()
+        {
+            Token.Dispose();
+            Next.Dispose();
+            Prev.Dispose();
+            PairNext.Dispose();
+        }
     }
 
     /// <summary>
@@ -150,6 +336,25 @@ public sealed class BpeTokeniser
         }
 
         return ids;
+    }
+
+    private static void MergePairInPlace(List<int> seq, (int Left, int Right) pair, int newId)
+    {
+        int write = 0;
+        int read = 0;
+        while (read < seq.Count)
+        {
+            if (read < seq.Count - 1 && seq[read] == pair.Left && seq[read + 1] == pair.Right)
+            {
+                seq[write++] = newId;
+                read += 2;
+            }
+            else
+            {
+                seq[write++] = seq[read++];
+            }
+        }
+        seq.RemoveRange(write, seq.Count - write);
     }
 
     /// <summary>

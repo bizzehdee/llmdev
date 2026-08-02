@@ -5,6 +5,15 @@ namespace Tokeniser.Tests;
 
 public class BpeTokeniserTests
 {
+    // Test corpora are tiny, so it doesn't matter that this may land on tmpfs
+    // (unlike the real CLI, which insists on genuine disk - see Program.cs).
+    private static readonly string ScratchDirectory = Path.Combine(Path.GetTempPath(), "tokeniser-tests-scratch");
+
+    static BpeTokeniserTests()
+    {
+        Directory.CreateDirectory(ScratchDirectory);
+    }
+
     [Fact]
     public void NewTokeniser_HasBaseByteVocabulary()
     {
@@ -20,7 +29,7 @@ public class BpeTokeniserTests
         try
         {
             var tokeniser = new BpeTokeniser();
-            tokeniser.Train(new[] { path }, targetVocabSize: 260);
+            tokeniser.Train(new[] { path }, targetVocabSize: 260, scratchDirectory: ScratchDirectory);
 
             Assert.True(tokeniser.VocabSize > 256);
         }
@@ -37,7 +46,7 @@ public class BpeTokeniserTests
         try
         {
             var tokeniser = new BpeTokeniser();
-            tokeniser.Train(new[] { path }, targetVocabSize: 300);
+            tokeniser.Train(new[] { path }, targetVocabSize: 300, scratchDirectory: ScratchDirectory);
 
             Assert.True(tokeniser.VocabSize <= 300);
         }
@@ -70,7 +79,7 @@ public class BpeTokeniserTests
         try
         {
             var tokeniser = new BpeTokeniser();
-            tokeniser.Train(new[] { path }, targetVocabSize: 280);
+            tokeniser.Train(new[] { path }, targetVocabSize: 280, scratchDirectory: ScratchDirectory);
 
             var encoded = tokeniser.Encode(corpus);
             var decoded = tokeniser.Decode(encoded);
@@ -84,6 +93,52 @@ public class BpeTokeniserTests
         }
     }
 
+    [Theory]
+    [InlineData("aaaaaaaaaaaaaaaa")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab")]
+    [InlineData("abababababababababababababababababababababababababababababababababababababababab")]
+    public void Train_HandlesOverlappingRepeatedPairsCorrectly(string corpus)
+    {
+        // Repeated/overlapping runs of the same pair (e.g. "aaaa") are the case where an
+        // incremental, position-based merge implementation is most likely to double-count
+        // or skip a merge, since merging one occurrence can invalidate its immediate neighbour.
+        var path = WriteTempFile(corpus);
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { path }, targetVocabSize: 300, scratchDirectory: ScratchDirectory);
+
+            var encoded = tokeniser.Encode(corpus);
+            var decoded = tokeniser.Decode(encoded);
+
+            Assert.Equal(corpus, decoded);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Train_MultipleFilesDoNotMergeAcrossFileBoundaries()
+    {
+        var pathA = WriteTempFile("xyxyxyxyxyxyxyxyxyxy");
+        var pathB = WriteTempFile("zzzzzzzzzzzzzzzzzzzz");
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { pathA, pathB }, targetVocabSize: 260, scratchDirectory: ScratchDirectory);
+
+            Assert.Equal("xyxyxyxyxyxyxyxyxyxy", tokeniser.Decode(tokeniser.Encode("xyxyxyxyxyxyxyxyxyxy")));
+            Assert.Equal("zzzzzzzzzzzzzzzzzzzz", tokeniser.Decode(tokeniser.Encode("zzzzzzzzzzzzzzzzzzzz")));
+        }
+        finally
+        {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
+    }
+
     [Fact]
     public void SaveThenLoad_ProducesEquivalentTokeniser()
     {
@@ -93,7 +148,7 @@ public class BpeTokeniserTests
         try
         {
             var tokeniser = new BpeTokeniser();
-            tokeniser.Train(new[] { trainPath }, targetVocabSize: 280);
+            tokeniser.Train(new[] { trainPath }, targetVocabSize: 280, scratchDirectory: ScratchDirectory);
             tokeniser.Save(vocabPath);
 
             var loaded = BpeTokeniser.Load(vocabPath);
