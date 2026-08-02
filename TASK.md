@@ -7,7 +7,9 @@ large heap allocations — this machine has OOM-killed itself on this project
 before. Flagged explicitly on the tasks it matters most for below.
 
 - [x] TASK-001: Byte-level BPE tokeniser (train, encode, decode, save/load)
+  Required by: TASK-022
 - [x] TASK-002: Directory input + disk-backed scratch for large corpora
+  Required by: TASK-018
 
 ## Tensor + autodiff engine
 Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
@@ -24,6 +26,7 @@ Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
   produce heap-backed results for now — routing large op results to disk
   is left to whichever later task first needs it.
   Depends on: none
+  Required by: TASK-015, TASK-021
 - [x] TASK-004: Reverse-mode autodiff — computation graph recording ops as
   they run, `Backward()` to propagate gradients, gradient accumulation.
   Covers the ops from TASK-003 plus softmax, exp/log, and the activation
@@ -36,6 +39,7 @@ Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
   values, plus explicit tests for gradient accumulation (a variable used
   twice, and a diamond dependency).
   Depends on: TASK-003
+  Required by: TASK-017
 
 ## Embeddings
 Required by: TASK-008
@@ -85,6 +89,7 @@ Required by: TASK-008
   correctness tests (changing a future position's value must not change an
   earlier position's output; contrasted against non-causal where it does).
   Depends on: TASK-004
+  Required by: TASK-020
 - [x] TASK-008: Full transformer block — multi-head attention, feed-forward
   layer, layernorm, residual connections, assembled and unit-tested as one
   block with a known input/output shape. Done:
@@ -99,6 +104,7 @@ Required by: TASK-008
   and a per-position-independence check for both layernorm and
   feed-forward (no cross-position mixing outside of attention).
   Depends on: TASK-005, TASK-006, TASK-007
+  Required by: TASK-020
 
 ## Model assembly
 - [x] TASK-009: Decoder-only (GPT-style) model — stack N transformer blocks
@@ -116,6 +122,7 @@ Required by: TASK-008
   stage (token/positional embeddings, a block's attention weight, the
   final norm).
   Depends on: TASK-008
+  Required by: TASK-020
 
 ## Training loop
 - [x] TASK-010: Batching — turn a tokenised corpus (TASK-001/002 output)
@@ -157,6 +164,7 @@ Required by: TASK-008
   end-to-end convergence tests (minimising a toy quadratic, and driving
   down cross-entropy loss against fixed targets over many steps).
   Depends on: TASK-004
+  Required by: TASK-016, TASK-017, TASK-019
 - [x] TASK-012: Training loop — wires TASK-009/010/011 together: forward
   pass, loss, backward pass, optimizer step, checkpointing (save/load model
   weights), basic logging of loss over time. Checkpoints and optimizer
@@ -184,7 +192,7 @@ Required by: TASK-008
   measurably drops on a small repetitive corpus over 100 steps, not just
   a unit-level check of each piece in isolation.
   Depends on: TASK-009, TASK-010, TASK-011
-  Required by: TASK-014
+  Required by: TASK-014, TASK-016
 
 ## Generation
 - [x] TASK-013: Sampling — greedy, temperature, and top-k/top-p decoding
@@ -209,7 +217,7 @@ Required by: TASK-008
   the decoded output always starts with the decoded prompt exactly (true
   by construction, since decode is just concatenation in token order).
   Depends on: TASK-012
-  Required by: TASK-014
+  Required by: TASK-014, TASK-020, TASK-023
 
 ## Interactive CLI
 Added after the original 7-stage plan, at the user's request (not part of
@@ -238,17 +246,23 @@ TASK-001..013's original scope).
 ## Optional optimised math backend
 Added after the original 7-stage plan, at the user's request (not part of
 TASK-001..013's original scope). This is the one deliberate, narrowly-scoped
-exception to PLAN.md's "no libraries" rule - see PLAN.md stage 9 for why
-it's scoped the way it is before starting this task; several design
-questions there need answering as part of the work, not before it.
+exception to PLAN.md's "no libraries" rule, scoped to exactly two named
+libraries - Math.NET Numerics and `System.Numerics.Tensors` - not a general
+opening. The justification: for the ops they'd cover (matmul above all),
+they're faster wrappers around math this project already implemented and
+understood from first principles in TASK-003, not new/different mechanics
+being hidden behind a library call. They don't replace the hand-written
+implementation, only offer a faster route through *later* stages (bigger
+training runs) once the earlier ones are understood. See PLAN.md stage 9
+for the full rationale and open design questions before starting this task.
 
 - [ ] TASK-015: `--optimised` opt-in fast path for `Tensor`'s hot ops
   (matmul first and foremost; elementwise ops as a stretch goal), backed by
-  Math.NET Numerics and/or `System.Numerics.Tensors`. Off by default - the
-  existing hand-written scalar implementation remains the default,
-  always-correct reference implementation, not something this task
-  replaces or deletes. Must keep the standing memory-discipline constraint
-  intact (PLAN.md): the optimised path most likely only applies to
+  Math.NET Numerics and/or `System.Numerics.Tensors` only - no other
+  library. Off by default - the existing hand-written scalar implementation
+  remains the default, always-correct reference implementation, not
+  something this task replaces or deletes. Must keep the standing
+  memory-discipline constraint intact (PLAN.md): the optimised path most likely only applies to
   heap-backed tensors (`HeapFloatBuffer`), since the library types involved
   expect contiguous managed memory, not `MappedArray<T>`'s disk-backed
   storage - large disk-backed tensors should keep using the scalar path,
@@ -261,6 +275,172 @@ questions there need answering as part of the work, not before it.
   both backends and getting equivalent results, not a separate smaller
   test suite scoped to just the fast path.
   Depends on: TASK-003
+
+## Instruction tuning
+Added after the original 7-stage plan, at the user's request (not part of
+TASK-001..013's original scope). Pairs naturally with TASK-014 (a fine-tuned
+checkpoint is what makes the chat CLI's output actually useful) but doesn't
+depend on it - this can be built and tested independently of the CLI.
+
+- [ ] TASK-016: Instruction tuning (SFT) - continue training a pretrained
+  `GptModel` checkpoint on (instruction, response) example pairs, with the
+  loss restricted to response tokens only. Two genuinely new capabilities
+  needed, not just re-wiring TASK-010/011/012 (see PLAN.md stage 10 for the
+  full rationale):
+  - **An example-based dataset**, distinct from TASK-010's `TokenCorpus`/
+    `BatchSampler` (continuous-stream sliding windows). Needs a data format
+    decision (a plain-text template with a fixed instruction/response
+    delimiter is the simplest starting point; a structured format like
+    JSON Lines is the more extensible one - pick one, don't build both) and
+    a loader that tokenises each pair into (inputIds, targetIds) plus which
+    target positions are actually response tokens.
+  - **Masked cross-entropy loss** - extend or parallel
+    `Training.CrossEntropyLoss` to average only over positions flagged as
+    "response," not every position, unlike TASK-011's version.
+  Reuses: `ModelCheckpoint.Load` to start from a pretrained model (not
+  random init) and `ModelCheckpoint.Save` for the fine-tuned result as a
+  *separate* checkpoint file (never overwrite the base pretrained one);
+  the same optimizer/backward-pass machinery as `Trainer`, likely via a
+  generalised `Trainer` or a sibling class - which one is an open design
+  question, not decided here. Conventionally uses a smaller learning rate
+  than pretraining; worth a sensible default plus making it configurable
+  rather than hardcoding pretraining's rate.
+
+  Sourcing the (instruction, response) pairs is a data-preparation
+  question, separate from the "no libraries" rule (that's about runtime
+  code dependencies, not how a data file gets written offline) - see
+  PLAN.md stage 10 for the fuller version. In short: manual authoring for
+  a small high-quality set, reformatting existing owned content (docs,
+  FAQs), generating draft pairs with a separate stronger model used purely
+  as an offline one-time data-prep tool (review before use, don't accept
+  uncritically), and/or existing public instruction-tuning datasets
+  (mind licensing) reformatted to whatever template this task settles on.
+  Depends on: TASK-011, TASK-012
+
+## Known limitations follow-ups
+Added at the user's request: one follow-up task per item in PLAN.md's
+"Known limitations / deferred" list (except GPU/distributed training,
+flagged there as genuinely out of scope, not just undone). Ordered
+smallest to largest, TASK-021/022 excepted (added later, appended at the
+end rather than re-numbered into size order).
+
+- [ ] TASK-017: Softmax numerical stability - add `Tensor.Max(axis,
+  keepDims)` (mirrors the existing `Sum`/`Mean` reductions in
+  `Tensor.Reductions.cs`), then subtract the per-row max before `Exp()` in
+  both `Variable.Softmax` (TASK-004) and `CrossEntropyLoss`'s
+  `log(sum(exp(x)))` term (TASK-011) - the standard "safe softmax" trick.
+  The smallest of these four: one new Tensor op plus two call-site
+  updates, no architecture change. `Generation.TokenSampler`'s softmax
+  already does this (it has no backward pass to complicate), so it's a
+  useful reference for the expected behaviour, not something to touch.
+  Verify via the existing finite-difference gradient checks (result should
+  be numerically identical for inputs that don't overflow either way) plus
+  a new test using large-magnitude logits that would overflow/underflow
+  without the fix.
+  Depends on: TASK-004, TASK-011
+
+- [ ] TASK-018: Fast bulk-encode for `BpeTokeniser` - a second encode path
+  that *applies* an already-learned merge table (no new merges learned,
+  unlike `Train`) but reuses `Train`'s disk-backed intrusive-linked-list
+  approach instead of `Encode`'s simple repeated merge-scan, so it scales
+  to a full large corpus instead of just a short prompt. This is what
+  would let `TokenCorpus` (TASK-010) be populated directly from a large
+  corpus at training time, rather than the current slow per-call `Encode`
+  path. Needs its own correctness tests (same output as `Encode` for
+  inputs `Encode` can still handle, just faster) rather than assuming
+  parity with `Train`'s different algorithm.
+  Depends on: TASK-002
+
+- [ ] TASK-019: Optional disk-backed AdamW moment estimates - a
+  constructor flag (e.g. `useDiskBackedState` + a scratch directory) on
+  `AdamWOptimizer` backing `m`/`v` with `Tensor.ZerosOnDisk` instead of
+  `Zeros`, mirroring the existing `MappedArray<T>` pattern. Deliberately
+  lower priority than the other three: cheap to build when the time comes,
+  but nothing built in this project so far has been large enough to need
+  it - build this when a real model size makes it matter, not
+  speculatively ahead of that.
+  Depends on: TASK-011
+
+- [ ] TASK-020: KV-cache for generation - the largest of these four, a
+  real architecture addition rather than a small patch. Needs a stateful
+  "generation session" concept holding cached K/V per layer, a modified
+  single-token forward path threaded through `MultiHeadAttention`,
+  `TransformerBlock`, and `GptModel` (today's `Forward` always recomputes
+  every layer over the whole context), and `Generation.TextGenerator`
+  updated to use the cached path during autoregressive generation instead
+  of re-forwarding the whole growing sequence every step. Correctness is
+  the critical thing to prove here, not just speed: cached-path output
+  must be *exactly* the same as today's non-cached output for the same
+  token sequence, at every step, not just "plausibly similar" - test by
+  comparing the two paths directly, not only by inspecting generated text.
+  Depends on: TASK-007, TASK-008, TASK-009, TASK-013
+
+- [ ] TASK-021: CPU parallelism for `Tensor`'s hot ops - unlike TASK-015,
+  this doesn't touch the "no libraries" question at all: .NET's Task
+  Parallel Library (`Parallel.For`/`Parallel.ForEach`, `System.Threading.Tasks`)
+  is BCL, not a new dependency, and the algorithm doesn't change - only how
+  many of this machine's cores execute the *same* hand-written scalar loop.
+  Confirmed via inspection that nothing in `src/` currently uses any
+  parallelism, so this is a real, not hypothetical, gap on a 16-core/
+  32-thread machine. Priority mirrors TASK-015: matmul's outer loops
+  (batch, and/or the output-row loop within each matmul) first - it's the
+  O(n³) dominant cost in a forward/backward pass - elementwise ops (`Tensor.
+  Elementwise.cs`/`Tensor.Unary.cs`) as a lower-priority follow-on given
+  their O(n) cost is far smaller. **Must preserve determinism**: only
+  parallelise independent outer loops (separate output rows/batches/
+  elements), never the inner accumulation loop within a single matmul
+  output element (`Tensor.MatMul`'s `for p in k` reduction) - a parallel
+  reduction there would make floating-point summation order (and therefore
+  the exact result, though not its correctness) non-deterministic across
+  runs, breaking bit-for-bit comparison against the existing test suite's
+  expected values. Likely not worth it for small tensors (thread-scheduling
+  overhead exceeds the work, e.g. the many `[1]`-shaped scalar tensors used
+  throughout this codebase for constants) - a size threshold below which
+  the existing sequential path is kept is worth considering, not just
+  parallelising unconditionally. Verify via the *existing* test suite
+  (results must match, not just "look about right") plus a manual/
+  benchmark wall-clock comparison - performance shouldn't be asserted in
+  the automated suite, environments vary too much for that to be reliable.
+  Depends on: TASK-003
+
+- [ ] TASK-022: Modern regex-based pre-tokenisation for the BPE tokeniser -
+  split text into chunks (word/whitespace/punctuation-ish runs) *before*
+  BPE merge-learning and encoding, so merges never cross a chunk boundary
+  in ways that produce bad tokens (e.g. merging a trailing space into a
+  word, or digits into overly-long number tokens). Explicitly **not**
+  GPT-2's original splitting regex - it's dated (weaker Unicode handling,
+  and no cap on how many digits a number chunk can span, among other
+  issues later tokenisers fixed) - use a more modern pattern as the
+  reference (GPT-4/`cl100k_base`-style splitting is the design target) via
+  `System.Text.RegularExpressions` (BCL, same non-issue as TASK-021's use
+  of TPL). Needs to apply identically in both `BpeTokeniser.Train` (pre-split
+  each input the same way file boundaries already prevent cross-document
+  merges - chunk boundaries become another place merges must never cross)
+  and `BpeTokeniser.Encode` (split first, encode each chunk independently,
+  concatenate) - training and inference must use the same chunking or
+  results silently diverge. **Breaking change to the token format**:
+  existing saved `vocab.bpe` files and anything trained against them
+  (checkpoints, since `vocabSize`/token ids shift) become incompatible and
+  need retraining - call this out clearly wherever it lands (README,
+  commit message), not just here. Test that merges never cross a chunk
+  boundary, and that encode/decode stays an exact roundtrip through the
+  new chunking.
+  Depends on: TASK-001
+
+## Documentation
+Added at the user's request.
+
+- [ ] TASK-023: Rewrite README.md as a lesson plan - walk through the whole
+  process from a directory of raw `.txt` files all the way to a usable
+  chatbot, one section per stage (mirroring PLAN.md's stage list), each
+  covering: what problem that stage solves and what's actually happening
+  conceptually, which source files to go read, and what to run to see it
+  working (a CLI command where one exists, otherwise a code snippet or the
+  relevant test project). Covers the full range including stages not built
+  yet (TASK-014 chat CLI, TASK-016 instruction tuning) - be clear about
+  what's runnable today versus what's planned, don't present unbuilt stages
+  as if they already work.
+  Depends on: TASK-013
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

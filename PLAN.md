@@ -14,14 +14,22 @@ understood, not a black box behind a library call. This is a deliberate,
 explicit trade-off: slower to reach a working model, but the whole point of
 the project is understanding the mechanics, not shipping a model quickly.
 
-**One explicit, opt-in exception (stage 9 / TASK-015):** an optional
-library-backed fast path for the tensor engine's hot ops, off by default,
-enabled only via an explicit flag. The hand-written scalar implementation
-stays the real, default, always-correct reference; the fast path is a
-strictly optional accelerant for anyone who wants to actually run a
-larger training job on this hardware, not a replacement for the
-first-principles version or a quiet erosion of the "no libraries" rule.
-See stage 9 below for why this is scoped as narrowly as it is.
+**One explicit, opt-in exception, scoped to exactly two named libraries
+(stage 9 / TASK-015):** Math.NET Numerics and `System.Numerics.Tensors`,
+and nothing else - not a general "libraries are fine now" opening. The
+rationale is narrow and specific: for the ops these two cover (matmul
+above all), they're effectively faster wrappers around math this project
+has *already implemented and understood* from first principles (TASK-003),
+not new capability or a different mechanism. They don't replace the
+hand-written scalar implementation - that stays the real, default,
+always-correct reference, on by default. The opt-in fast path exists so
+someone who has already been through the earlier stages (and understood
+the mechanics of what a matmul actually does) has a faster way to get
+through *later* stages - training a bigger model, faster - without
+re-litigating that understanding or standing up a whole SIMD/BLAS
+implementation by hand just to make later experimentation practical on
+real hardware. See stage 9 below for the open design questions this still
+needs to answer.
 
 ## Goal
 Learn how LLMs work by building one end-to-end: tokeniser → tensors/autodiff
@@ -117,13 +125,16 @@ rather than assuming it fits in RAM:
      contiguous managed memory, not our disk-backed buffer abstraction.
      Whether/how a large disk-backed tensor could still get *any* benefit
      (e.g. computing over bounded chunks) is an open question, not a given.
-   - `System.Numerics.Tensors` ships in the .NET BCL (no NuGet needed);
-     Math.NET Numerics is a real external package. "No libraries" was
-     never really about install friction - it's about not hiding the
-     mechanics behind someone else's code. An opt-in flag keeps that
-     distinction honest: the default experience is still 100%
-     first-principles; `--optimised` is a clearly-labelled, deliberate
-     exception someone reaches for, not a silent swap.
+   - This exception names exactly Math.NET Numerics and
+     `System.Numerics.Tensors` - not "libraries are fine now" generally.
+     The justification is that for the ops they'd cover, they're faster
+     wrappers around math already implemented and understood from first
+     principles in TASK-003, not new/different mechanics being hidden.
+     They don't replace that implementation, only offer a faster route
+     through *later* stages once the earlier ones are understood. Any
+     other library (ML/tokeniser/tensor or otherwise) is still out of
+     scope and would need its own explicit conversation, not "well we
+     already made an exception once."
    - Needs a way to thread the choice from a CLI flag down to `Tensor`
      construction/ops without polluting every call site - likely a
      process-wide switch set once at startup (e.g. a static
@@ -138,31 +149,120 @@ rather than assuming it fits in RAM:
      pass (O(n³) vs elementwise ops' O(n)), so it's the one actually worth
      optimising first; elementwise ops are a "nice to have" stretch goal on
      top, not required for the flag to be worth having at all.
+10. **Instruction tuning (SFT)** — continue training a pretrained
+    checkpoint (TASK-012) on (instruction, response) example pairs instead
+    of continuous raw text, so the resulting model actually behaves like
+    something TASK-014's chat CLI can usefully talk to, rather than just
+    continuing text in the training corpus's style. Added after the
+    original 7-stage plan, at the user's request.
+
+    **This is genuinely new capability, not just re-wiring existing
+    pieces** - two real gaps, not implementation details to wave through:
+    - **Data shape.** TASK-010's `BatchSampler` draws sliding windows from
+      one continuous token stream - there's no such thing as an "example
+      boundary" in that model. Instruction tuning data is inherently
+      example-based (each instruction/response pair is its own training
+      example), which needs a different data pipeline, not a mode switch
+      on the existing one.
+    - **Loss masking.** Standard SFT practice computes the loss only over
+      the *response* tokens, not the instruction/prompt tokens - the model
+      shouldn't be penalised for not "predicting" the user's own words.
+      `CrossEntropyLoss.Compute` (TASK-011) has no masking concept today;
+      it averages over every position.
+
+    See TASK-016 for how these get resolved; this is deliberately left
+    open here rather than pre-deciding an implementation.
+
+    **Where the (instruction, response) pairs themselves come from is a
+    data-sourcing question, not a code dependency** - separate from the
+    "no libraries" rule (that rule is about what code this program links
+    against, not how a human prepares a training data file offline). A
+    real attempt at this will likely combine more than one of:
+    - **Manual authoring.** Most reliable, most labour-intensive. Best for
+      a small (tens to low hundreds), high-quality, deliberately-scoped
+      set covering a specific domain/style rather than broad generality -
+      realistic for what a from-scratch, personal-machine-trained model
+      can actually learn from anyway.
+    - **Reformatting data that already exists.** FAQ pages, documentation,
+      Q&A content, support transcripts, etc. the user has rights to use,
+      rewritten into (instruction, response) shape. Semi-manual, but
+      scales further than writing every pair from nothing.
+    - **Generating candidate pairs with a separate, stronger model**, used
+      purely offline as a data-preparation tool (e.g. prompting an
+      existing assistant to draft instruction/response examples for given
+      topics, or to draft responses for a list of instructions the user
+      supplies) - the "self-instruct" style approach several public
+      instruction-tuning datasets were bootstrapped with. This model
+      (Claude, or whatever the user has access to) is not a runtime
+      dependency of this project - it's a one-time, offline step producing
+      a plain data file, same as if a human had typed it. Draft output
+      from this route should be reviewed/edited before use, not accepted
+      uncritically.
+    - **Existing public instruction-tuning datasets** (e.g. Alpaca,
+      Dolly) as a starting point or reference for format - mind licensing
+      terms before use, and note that reformatting to whatever template
+      TASK-016 settles on will still be needed.
+
+## Documentation (TASK-023)
+README.md is due a rewrite into a lesson plan: one section per stage
+(mirroring the numbered list above), each covering what problem that stage
+solves and what's actually happening conceptually, which source files to
+read, and what to run to see it working - covering the full range from a
+directory of raw `.txt` files through to a usable chatbot, including
+stages not built yet (be clear about what's runnable today versus
+planned, not presented as if it already works). Added at the user's
+request; not yet started.
 
 ## Known limitations / deferred (not bugs - documented trade-offs)
 Flagged individually in TASK.md as each was made; collected here for a
-single view of what a real training run might need to revisit:
+single view of what a real training run might need to revisit. All but
+the last now have a follow-up task in TASK.md (added at the user's
+request); GPU/distributed training remains genuinely out of scope, not
+just "not done yet":
 
 - **Bulk-encoding a large corpus is slow.** `BpeTokeniser.Encode` uses the
   simple merge-scan approach tuned for short/moderate text (TASK-010),
   not the efficient training-time algorithm `Train` uses. Fine for a
   prompt; would need work for encoding a full large corpus into training
-  data.
+  data. → TASK-018.
 - **No KV-cache during generation** (TASK-013): every step recomputes a
   full forward pass over the whole context. Simple and correct, not fast.
+  → TASK-020, the largest of the four follow-ups - a real architecture
+  addition, not a small patch.
 - **Checkpoints and AdamW's moment estimates are plain heap allocations**
   (TASK-011/012), not disk-backed like the tokeniser's/tensor engine's
-  large structures - nothing built so far has been large enough to need it.
+  large structures - nothing built so far has been large enough to need
+  it. → TASK-019, deliberately lower-priority: the mechanism is cheap to
+  build (mirrors the existing `MappedArray<T>`/`ZerosOnDisk` pattern) but
+  build it when a model is actually large enough to need it, not
+  speculatively.
 - **Two places don't use the max-subtraction softmax stability trick**:
   `Variable.Softmax` (TASK-004, used in attention/training - would need a
   max-along-axis Tensor reduction that doesn't exist yet) and
   `CrossEntropyLoss`'s `log(sum(exp(x)))` term (TASK-011). Fine at the
   scales tested so far; `Generation.TokenSampler`'s softmax *does* use the
   trick, since it has no backward pass to complicate and temperature
-  scaling can push values to real extremes.
-- Regex-based pre-tokenisation (GPT-2 style splitting on whitespace/
-  punctuation before BPE) — the current whole-text byte stream approach
-  works; revisit only if it becomes a real limitation.
-- GPU/parallel execution, mixed precision, distributed training — CPU-only,
-  single-machine scope. This is a learning project, not a performance
-  target.
+  scaling can push values to real extremes. → TASK-017, the smallest of
+  the four follow-ups.
+- **Regex-based pre-tokenisation** — the current whole-text byte stream
+  approach works, but has no notion of "chunk" boundaries (word/whitespace/
+  punctuation runs) that BPE merges shouldn't cross. → TASK-022. Explicitly
+  *not* GPT-2's original splitting pattern - it's dated (e.g. its number
+  handling and Unicode/whitespace treatment are worse than what came
+  later); use a more modern pattern (GPT-4/`cl100k_base`-style splitting
+  is the reference point) as the design target instead of reproducing an
+  old pattern just because GPT-2 is the model this project's byte-level
+  BPE approach was originally modelled on.
+- **No CPU parallelism anywhere** - confirmed by inspection (no
+  `Parallel`/`Task.Run`/threading in `src/`), not merely undocumented: every
+  `Tensor` op, matmul above all, runs as a single-threaded scalar loop.
+  This is a distinct gap from the GPU/distributed-training exclusion below
+  - it doesn't need a GPU or another machine, just more of the cores
+  already on this one, via .NET's own Task Parallel Library
+  (`Parallel.For`/`Parallel.ForEach` - BCL, not a "no libraries" exception
+  the way TASK-015 is, any more than `MemoryMappedFile` or `async`/`await`
+  are). → TASK-021.
+- GPU execution, mixed precision, distributed (multi-machine) training —
+  genuinely out of scope, not just undone. This is a learning project, not
+  a performance target; CPU-only, single-machine, but "single-machine"
+  doesn't mean "single-threaded" (see TASK-021 above, which is in scope).
