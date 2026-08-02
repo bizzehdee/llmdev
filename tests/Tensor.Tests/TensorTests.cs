@@ -426,6 +426,85 @@ public class TensorTests
         Assert.Equal(new float[] { 0, 0, 3, 4, 5, 6 }, scattered.ToArray());
     }
 
+    [Fact]
+    public void GatherColumns_PicksOneElementPerRow()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var result = t.GatherColumns([2, 0]);
+
+        Assert.Equal(new[] { 2 }, result.Shape);
+        Assert.Equal(new float[] { 3, 4 }, result.ToArray());
+    }
+
+    [Fact]
+    public void GatherColumns_OutOfRangeColumnThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => t.GatherColumns([3, 0]));
+    }
+
+    [Fact]
+    public void GatherColumns_WrongIndexCountThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.GatherColumns([0, 1, 2]));
+    }
+
+    [Fact]
+    public void ScatterAddColumns_PlacesEachValueAtItsColumnIndex()
+    {
+        using var t = Tensor.FromValues([10, 20], [2]);
+
+        using var result = t.ScatterAddColumns([2, 0], columnCount: 3);
+
+        Assert.Equal(new[] { 2, 3 }, result.Shape);
+        Assert.Equal(new float[] { 0, 0, 10, 20, 0, 0 }, result.ToArray());
+    }
+
+    [Fact]
+    public void ScatterAddColumns_IsGatherColumnsAdjoint()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var gathered = t.GatherColumns([1, 2]);
+        using var scattered = gathered.ScatterAddColumns([1, 2], columnCount: 3);
+
+        Assert.Equal(new float[] { 0, 2, 0, 0, 0, 6 }, scattered.ToArray());
+    }
+
+    [Fact]
+    public void Scale_MultipliesEveryElementByFactor()
+    {
+        using var t = Tensor.FromValues([1, 2, 3], [3]);
+
+        using var result = t.Scale(2.5f);
+
+        Assert.Equal(new float[] { 2.5f, 5f, 7.5f }, result.ToArray());
+    }
+
+    [Fact]
+    public void SubtractInPlace_MutatesBufferDirectly()
+    {
+        using var t = Tensor.FromValues([10, 20, 30], [3]);
+        using var delta = Tensor.FromValues([1, 2, 3], [3]);
+
+        t.SubtractInPlace(delta);
+
+        Assert.Equal(new float[] { 9, 18, 27 }, t.ToArray());
+    }
+
+    [Fact]
+    public void SubtractInPlace_ShapeMismatchThrows()
+    {
+        using var t = Tensor.Zeros([2, 2]);
+        using var delta = Tensor.Zeros([4]);
+
+        Assert.Throws<InvalidOperationException>(() => t.SubtractInPlace(delta));
+    }
+
     private static IEqualityComparer<float> EqualityComparer() => new ApproximateFloatComparer(1e-5f);
 
     private sealed class ApproximateFloatComparer(float tolerance) : IEqualityComparer<float>

@@ -265,6 +265,12 @@ public class VariableTests
         Assert.Equal(new float[] { 2, 2, 0, 0 }, weights.Gradient.ToArray());
     }
 
+    [Fact]
+    public void GatherColumns_GradientMatchesFiniteDifference()
+    {
+        CheckGradient(vars => vars[0].GatherColumns([1, 0]), RandomVariable([2, 3]));
+    }
+
     private static readonly Random Rng = new(1234);
 
     private static Variable RandomVariable(int[] shape, float min = -3f, float max = 3f)

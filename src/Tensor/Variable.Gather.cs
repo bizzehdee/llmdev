@@ -11,4 +11,14 @@ public sealed partial class Variable
             AccumulateGradient(result.Gradient.ScatterAddRows(rowIndices, Value.Shape[0]));
         }, this);
     }
+
+    /// <summary>Differentiable per-row column pick - see Tensor.GatherColumns/ScatterAddColumns.</summary>
+    public Variable GatherColumns(int[] columnIndices)
+    {
+        var value = Value.GatherColumns(columnIndices);
+        return FromOp(value, result => () =>
+        {
+            AccumulateGradient(result.Gradient.ScatterAddColumns(columnIndices, Value.Shape[1]));
+        }, this);
+    }
 }

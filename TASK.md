@@ -136,8 +136,26 @@ Required by: TASK-008
   it's outside batching itself; revisit if an actual training run proves
   it's too slow in practice.
   Depends on: TASK-002
-- [ ] TASK-011: Cross-entropy loss + optimizer (SGD first, then AdamW) built
-  on the autodiff engine.
+- [x] TASK-011: Cross-entropy loss + optimizer (SGD first, then AdamW) built
+  on the autodiff engine. Done: `src/Training/{CrossEntropyLoss,SgdOptimizer,AdamWOptimizer}.cs`.
+  Loss computes log-softmax directly (x - log(sum(exp(x)))) rather than
+  Softmax().Log(), to avoid round-tripping through a softmax value that
+  could already have underflowed to 0 - same no-max-subtraction caveat as
+  `Variable.Softmax` still applies to the sum(exp(x)) term itself, though.
+  Needed two new tensor primitives: `Tensor.GatherColumns`/`ScatterAddColumns`
+  (pick one column per row - "the log-probability assigned to the correct
+  next token" - and its gradient-scattering inverse), and
+  `Tensor.SubtractInPlace`, the one deliberate mutation primitive in the
+  whole tensor engine (every other op returns a new tensor): needed
+  because a `Variable.Value` can't be reassigned once an optimizer holds
+  that Variable by reference. AdamW's moment-estimate state is plain heap
+  tensors for now (~2x parameter count); TASK-012 decides whether that
+  needs disk-backing once model size makes it non-trivial (already flagged
+  there in PLAN.md). Tested via known-exact-value checks (uniform logits
+  give loss = log(vocabSize) exactly), gradient-direction sanity, finite-
+  difference gradient checks, a hand-computed single AdamW step, and two
+  end-to-end convergence tests (minimising a toy quadratic, and driving
+  down cross-entropy loss against fixed targets over many steps).
   Depends on: TASK-004
 - [ ] TASK-012: Training loop — wires TASK-009/010/011 together: forward
   pass, loss, backward pass, optimizer step, checkpointing (save/load model
