@@ -118,11 +118,23 @@ Required by: TASK-008
   Depends on: TASK-008
 
 ## Training loop
-- [ ] TASK-010: Batching — turn a tokenised corpus (TASK-001/002 output)
+- [x] TASK-010: Batching — turn a tokenised corpus (TASK-001/002 output)
   into fixed-length training batches (input/target pairs shifted by one
   token) for next-token prediction. Stream/index batches from the
   disk-backed token store rather than loading the full tokenised corpus
-  into RAM at once.
+  into RAM at once. Done: new `src/Training/` project —
+  `TokenCorpus` (a token-id stream in a disk-backed `MappedArray<int>`,
+  reusing `Common`'s pattern) and `BatchSampler` (draws fixed-length
+  input/target windows from it; batch memory is O(batchSize*contextLength),
+  never O(corpus length)). `GptModel` (TASK-009) has no batch dimension of
+  its own, so a "batch" here is just a set of examples for TASK-012's
+  training loop to accumulate gradients over, not a single batched tensor
+  op. Known gap: getting token ids into `TokenCorpus` in the first place
+  still goes through `BpeTokeniser.Encode`, which (unlike `Train`) uses the
+  simple merge-scan approach tuned for short/moderate text, not efficient
+  bulk encoding of a large corpus - noted here rather than solved, since
+  it's outside batching itself; revisit if an actual training run proves
+  it's too slow in practice.
   Depends on: TASK-002
 - [ ] TASK-011: Cross-entropy loss + optimizer (SGD first, then AdamW) built
   on the autodiff engine.

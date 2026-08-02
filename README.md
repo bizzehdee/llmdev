@@ -70,3 +70,5 @@ dotnet test
 - `tests/Tokeniser.Tests/` — xUnit tests covering training, roundtrip encode/decode, and save/load.
 - `tests/Tensor.Tests/` — xUnit tests covering tensor construction, elementwise ops, broadcasting, matmul, transpose, reductions, and autodiff (finite-difference gradient checks).
 - `tests/Model.Tests/` — xUnit tests covering model components (embeddings, attention, layernorm, feed-forward, transformer block, and the full `GptModel`), with finite-difference gradient checks and end-to-end causal-masking correctness throughout.
+- `src/Training/` — `TokenCorpus` (a disk-backed token-id stream) and `BatchSampler` (fixed-length next-token-prediction input/target windows) for feeding `GptModel` during training.
+- `tests/Training.Tests/` — xUnit tests covering corpus storage and batch sampling correctness (window shifting, bounds, reproducibility).
