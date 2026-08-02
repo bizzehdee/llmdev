@@ -40,4 +40,6 @@ public sealed class FeedForward
         var hidden = x.MatMul(InputWeight).Add(InputBias).Relu();
         return hidden.MatMul(OutputWeight).Add(OutputBias);
     }
+
+    public IReadOnlyList<Variable> Parameters() => [InputWeight, InputBias, OutputWeight, OutputBias];
 }

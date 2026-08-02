@@ -64,4 +64,15 @@ public sealed class GptModel
         var tiedOutputWeight = TokenEmbedding.Weight.Transpose(0, 1); // [embeddingDim, vocabSize]
         return x.MatMul(tiedOutputWeight);
     }
+
+    /// <summary>
+    /// Every trainable parameter, in a fixed deterministic order (used by
+    /// both an optimizer and by checkpointing to line up saved values with
+    /// the right Variable). Excludes the output projection: it's weight-tied
+    /// to TokenEmbedding.Weight (see the class doc comment), not a separate
+    /// parameter, so including it again here would double-count and double
+    /// its effective learning rate.
+    /// </summary>
+    public IReadOnlyList<Variable> Parameters() =>
+        [.. TokenEmbedding.Parameters(), .. PositionalEmbedding.Parameters(), .. Blocks.SelectMany(b => b.Parameters()), .. FinalNorm.Parameters()];
 }

@@ -1,18 +1,17 @@
 namespace Tensor;
 
+/// <summary>
+/// Every op elsewhere in the tensor engine deliberately returns a new
+/// tensor rather than mutating - the two methods here are the only
+/// exceptions, both needed because a trained weight (a Variable's Value)
+/// can't simply be reassigned to a new Tensor object once an optimizer or
+/// checkpoint loader is holding that same Variable by reference. Neither
+/// is part of the autodiff graph, and neither should ever be called on
+/// anything a Backward() pass still needs to see.
+/// </summary>
 public sealed partial class Tensor
 {
-    /// <summary>
-    /// Mutates this tensor's buffer directly: <c>this -= delta</c>,
-    /// element-wise. Every other op in this file (and its siblings)
-    /// deliberately returns a new tensor rather than mutating - this is the
-    /// one exception, needed because a trained weight (a Variable's Value)
-    /// can't simply be reassigned to a new Tensor object once optimizer
-    /// state (in the training loop, TASK-012) is holding onto that same
-    /// Variable by reference. Not part of the autodiff graph - only ever
-    /// meant for an optimizer applying a computed update to a parameter,
-    /// never for anything a Backward() pass needs to see.
-    /// </summary>
+    /// <summary>this -= delta, element-wise. Used by an optimizer applying a computed update to a parameter.</summary>
     public void SubtractInPlace(Tensor delta)
     {
         if (!Shape.SequenceEqual(delta.Shape))
@@ -23,6 +22,20 @@ public sealed partial class Tensor
         for (int i = 0; i < Length; i++)
         {
             _buffer[i] -= delta._buffer[i];
+        }
+    }
+
+    /// <summary>Overwrites this tensor's values in place. Used to restore a parameter's value from a checkpoint.</summary>
+    public void LoadInPlace(float[] values)
+    {
+        if (values.Length != Length)
+        {
+            throw new InvalidOperationException($"Expected {Length} values, got {values.Length}.");
+        }
+
+        for (int i = 0; i < Length; i++)
+        {
+            _buffer[i] = values[i];
         }
     }
 }

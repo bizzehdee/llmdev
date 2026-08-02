@@ -41,4 +41,7 @@ public sealed class TransformerBlock
 
         return x;
     }
+
+    public IReadOnlyList<Variable> Parameters() =>
+        [.. Attention.Parameters(), .. FeedForward.Parameters(), .. PreAttentionNorm.Parameters(), .. PreFeedForwardNorm.Parameters()];
 }

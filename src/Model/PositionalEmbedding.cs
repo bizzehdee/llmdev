@@ -47,4 +47,6 @@ public sealed class PositionalEmbedding
         }
         return Weight.GatherRows(positionIds);
     }
+
+    public IReadOnlyList<Variable> Parameters() => [Weight];
 }

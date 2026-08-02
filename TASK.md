@@ -157,12 +157,32 @@ Required by: TASK-008
   end-to-end convergence tests (minimising a toy quadratic, and driving
   down cross-entropy loss against fixed targets over many steps).
   Depends on: TASK-004
-- [ ] TASK-012: Training loop — wires TASK-009/010/011 together: forward
+- [x] TASK-012: Training loop — wires TASK-009/010/011 together: forward
   pass, loss, backward pass, optimizer step, checkpointing (save/load model
   weights), basic logging of loss over time. Checkpoints and optimizer
   state (e.g. Adam's moment estimates, which double memory vs. the raw
   weights) are candidates for disk-backed storage once model size makes
-  them non-trivial.
+  them non-trivial. Done: `src/Training/{Trainer,ModelCheckpoint}.cs`, plus
+  a new `GptModel.Parameters()` (and matching `Parameters()` on every
+  sub-layer, composed bottom-up) so an optimizer/checkpoint can enumerate
+  every trainable Variable - explicitly excludes the weight-tied output
+  projection to avoid double-counting it. `Trainer.Step` accumulates
+  gradients over a batch by scaling each example's loss by 1/batchSize
+  before its own `Backward()` call (rather than summing raw gradients and
+  scaling after), keeping the effective step size independent of batch
+  size using only existing autodiff ops. Logging is a plain
+  `Action<int,float>? onStep` callback (mirrors `BpeTokeniser.Train`'s
+  `onMerge`), not hardcoded console output. Checkpointing is binary
+  (shape + values per parameter, hyperparameters in the header so `Load`
+  reconstructs the exact architecture before overwriting values in place)
+  - deferred rather than solved: still plain heap allocation, no
+  disk-backing yet for checkpoints or AdamW's moment estimates, since
+  nothing in this project has been large enough yet to need it; revisit
+  if that changes. Tested via checkpoint round-trip (identical parameter
+  values and identical forward-pass output before/after save+load,
+  corrupted-file rejection) and a genuine end-to-end training run: loss
+  measurably drops on a small repetitive corpus over 100 steps, not just
+  a unit-level check of each piece in isolation.
   Depends on: TASK-009, TASK-010, TASK-011
 
 ## Generation

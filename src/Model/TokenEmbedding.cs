@@ -27,4 +27,6 @@ public sealed class TokenEmbedding
 
     /// <summary>Looks up a sequence of token ids, returning a [sequenceLength, embeddingDim] variable.</summary>
     public Variable Forward(int[] tokenIds) => Weight.GatherRows(tokenIds);
+
+    public IReadOnlyList<Variable> Parameters() => [Weight];
 }

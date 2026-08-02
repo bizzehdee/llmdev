@@ -41,4 +41,6 @@ public sealed class LayerNorm
 
         return normalized.Multiply(Gamma).Add(Beta);
     }
+
+    public IReadOnlyList<Variable> Parameters() => [Gamma, Beta];
 }

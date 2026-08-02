@@ -61,6 +61,8 @@ public sealed class MultiHeadAttention
         return merged.MatMul(OutputWeight);
     }
 
+    public IReadOnlyList<Variable> Parameters() => [QueryWeight, KeyWeight, ValueWeight, OutputWeight];
+
     /// <summary>[seqLen, embeddingDim] -> [numHeads, seqLen, headDim], so batched matmul treats heads as independent batches.</summary>
     private Variable SplitHeads(Variable x, int seqLen) =>
         x.Reshape([seqLen, NumHeads, HeadDim]).Transpose(0, 1);

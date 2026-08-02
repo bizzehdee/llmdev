@@ -19,6 +19,34 @@ public class GptModelTests
     }
 
     [Fact]
+    public void Parameters_CountsEveryLearnedVariableExactlyOnce()
+    {
+        var model = new GptModel(vocabSize: 20, embeddingDim: 8, numLayers: 2, numHeads: 2, maxSequenceLength: 16, random: new Random(1));
+
+        var parameters = model.Parameters();
+
+        // Per block: 4 attention weights + 4 feed-forward (2 weights + 2 biases) + 2*2 layernorm (gamma+beta) = 12.
+        // Plus token embedding, positional embedding, and the final norm's gamma+beta.
+        int expectedPerBlock = 4 + 4 + 4;
+        int expected = 1 /* token embedding */ + 1 /* positional embedding */ + 2 * expectedPerBlock + 2 /* final norm */;
+        Assert.Equal(expected, parameters.Count);
+    }
+
+    [Fact]
+    public void Parameters_DoesNotIncludeASeparateOutputProjectionWeight()
+    {
+        // The output projection is weight-tied to TokenEmbedding.Weight
+        // (see GptModel.Forward), so it must not appear as its own entry -
+        // that would double-count it and double its effective learning rate.
+        var model = new GptModel(vocabSize: 20, embeddingDim: 8, numLayers: 1, numHeads: 2, maxSequenceLength: 16, random: new Random(1));
+
+        var parameters = model.Parameters();
+
+        int occurrencesOfTokenEmbeddingWeight = parameters.Count(p => ReferenceEquals(p, model.TokenEmbedding.Weight));
+        Assert.Equal(1, occurrencesOfTokenEmbeddingWeight);
+    }
+
+    [Fact]
     public void Forward_OutputShapeIsSequenceLengthByVocabSize()
     {
         var model = new GptModel(vocabSize: 20, embeddingDim: 8, numLayers: 2, numHeads: 2, maxSequenceLength: 16, random: new Random(1));
