@@ -101,9 +101,20 @@ Required by: TASK-008
   Depends on: TASK-005, TASK-006, TASK-007
 
 ## Model assembly
-- [ ] TASK-009: Decoder-only (GPT-style) model — stack N transformer blocks
+- [x] TASK-009: Decoder-only (GPT-style) model — stack N transformer blocks
   from TASK-008, add the output projection back to vocabulary logits over
-  the tokeniser's vocabulary (TASK-001).
+  the tokeniser's vocabulary (TASK-001). Done: `src/Model/GptModel.cs` —
+  token+positional embeddings, N causal `TransformerBlock`s, a final
+  layernorm (GPT-2's "ln_f"), then an output projection that reuses
+  (rather than duplicates) `TokenEmbedding.Weight`, transposed - weight
+  tying, same as GPT-2 itself. Tested end to end: causal masking survives
+  the full model (a later token can't change an earlier position's
+  logits), weight tying verified by checking the output projection's
+  gradient reaches embedding rows that were never looked up as input
+  tokens (proof it's the same matrix, not just equal by coincidence), and
+  finite-difference gradient checks against parameters spanning every
+  stage (token/positional embeddings, a block's attention weight, the
+  final norm).
   Depends on: TASK-008
 
 ## Training loop

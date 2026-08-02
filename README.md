@@ -66,7 +66,7 @@ dotnet test
 - `src/Tokeniser/Program.cs` — command-line entry point.
 - `src/Common/MappedArray.cs` — disk-backed (memory-mapped) array type shared by the tokeniser and the tensor engine.
 - `src/Tensor/` — the N-dimensional `Tensor` type and the `Variable` reverse-mode autodiff engine built on it (see PLAN.md/TASK.md).
-- `src/Model/` — learned model components built on `Tensor`/`Variable`: token/positional embeddings, scaled dot-product and multi-head (causal) attention, layernorm, feed-forward, and a full GPT-2-style pre-norm `TransformerBlock`.
+- `src/Model/` — learned model components built on `Tensor`/`Variable`: token/positional embeddings, scaled dot-product and multi-head (causal) attention, layernorm, feed-forward, a GPT-2-style pre-norm `TransformerBlock`, and `GptModel` — the full decoder-only model (stacked blocks + weight-tied output projection to vocabulary logits).
 - `tests/Tokeniser.Tests/` — xUnit tests covering training, roundtrip encode/decode, and save/load.
 - `tests/Tensor.Tests/` — xUnit tests covering tensor construction, elementwise ops, broadcasting, matmul, transpose, reductions, and autodiff (finite-difference gradient checks).
-- `tests/Model.Tests/` — xUnit tests covering model components: embeddings, attention (causal-masking correctness), layernorm, feed-forward, and the assembled transformer block, all with finite-difference gradient checks.
+- `tests/Model.Tests/` — xUnit tests covering model components (embeddings, attention, layernorm, feed-forward, transformer block, and the full `GptModel`), with finite-difference gradient checks and end-to-end causal-masking correctness throughout.
