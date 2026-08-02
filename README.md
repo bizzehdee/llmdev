@@ -72,3 +72,15 @@ dotnet test
 - `tests/Model.Tests/` — xUnit tests covering model components (embeddings, attention, layernorm, feed-forward, transformer block, and the full `GptModel`), with finite-difference gradient checks and end-to-end causal-masking correctness throughout.
 - `src/Training/` — `TokenCorpus` (a disk-backed token-id stream), `BatchSampler` (fixed-length next-token-prediction input/target windows), `CrossEntropyLoss`, `SgdOptimizer`/`AdamWOptimizer`, `ModelCheckpoint` (binary save/load of a `GptModel`'s architecture + weights), and `Trainer` — the training loop that wires all of it together.
 - `tests/Training.Tests/` — xUnit tests covering corpus storage, batch sampling correctness, loss values/gradients, optimizer convergence, checkpoint round-tripping, and a genuine end-to-end training run (loss measurably drops on a small repetitive corpus).
+- `src/Generation/` — `SamplingOptions`, `TokenSampler` (greedy/temperature/top-k/top-p), and `TextGenerator` — runs a `GptModel` autoregressively and decodes the result back to text via the tokeniser.
+- `tests/Generation.Tests/` — xUnit tests covering sampling correctness (deterministic greedy, statistical distribution checks) and end-to-end generation.
+
+## Project status
+
+All 7 planned stages are done (see PLAN.md/TASK.md): tokeniser, tensor +
+autodiff engine, embeddings, attention + transformer block, full model
+assembly, training loop, and generation. The project can train a small
+GPT-style model from scratch on a text corpus and generate text from it,
+entirely from first principles. See PLAN.md's "Known limitations /
+deferred" section for documented trade-offs (not bugs) a larger training
+run might need to revisit.

@@ -186,9 +186,27 @@ Required by: TASK-008
   Depends on: TASK-009, TASK-010, TASK-011
 
 ## Generation
-- [ ] TASK-013: Sampling — greedy, temperature, and top-k/top-p decoding
+- [x] TASK-013: Sampling — greedy, temperature, and top-k/top-p decoding
   from a trained (or in-progress) model, using the tokeniser to decode
-  output token ids back to text.
+  output token ids back to text. Done: new `src/Generation/` project
+  (`SamplingOptions`, `TokenSampler`, `TextGenerator`). Deliberately plain
+  float-array math, not Tensor/Variable - sampling is inference-only, no
+  gradient needed, so building an autodiff graph for it would be pure
+  waste. Unlike `Variable.Softmax`, this softmax *does* use the
+  max-subtraction stability trick (flagged as a gap back in TASK-004):
+  no backward pass to complicate here, and temperature scaling can push
+  logits to genuine extremes, so it costs nothing and actually matters.
+  No KV-cache - every generation step recomputes a full forward pass over
+  the whole context (simple and correct over fast; a production inference
+  server would want one, this doesn't need one). Once the growing sequence
+  would exceed the model's context window, generation keeps going via a
+  sliding window over the most recent `MaxSequenceLength` tokens rather
+  than stopping. Tested via deterministic greedy generation, statistical
+  checks that sampled frequencies roughly track softmax probabilities and
+  that top-k=1/very-small-top-p both collapse to near-greedy behaviour,
+  and an end-to-end run through a real trained `BpeTokeniser` confirming
+  the decoded output always starts with the decoded prompt exactly (true
+  by construction, since decode is just concatenation in token order).
   Depends on: TASK-012
 
 ## Notes
