@@ -41,7 +41,8 @@ rather than assuming it fits in RAM:
   loop), where dataset size and model state are the largest consumers, but
   keep it in mind for the tensor engine (TASK-003/004) too, since tensors
   are the thing everything else scales through.
-- See `src/Tokeniser/MappedInt32Array.cs` for the established pattern
+- See `src/Common/MappedArray.cs` for the established pattern (shared by
+  the tokeniser and the tensor engine)
   (memory-mapped scratch file wrapper) to reuse or adapt.
 
 ## Stages

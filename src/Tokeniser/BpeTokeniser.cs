@@ -1,4 +1,5 @@
 using System.Text;
+using Common;
 
 namespace Tokeniser;
 
@@ -42,7 +43,7 @@ public sealed class BpeTokeniser
     /// Two things keep this from blowing up on a large corpus:
     ///
     /// 1. Memory for the corpus itself lives in memory-mapped scratch files
-    ///    (<see cref="MappedInt32Array"/>), not the managed heap. The OS can
+    ///    (<c>MappedArray&lt;int&gt;</c>), not the managed heap. The OS can
     ///    reclaim those pages directly (drop clean ones, write back dirty
     ///    ones) instead of only being able to page a plain array out to
     ///    swap - which is what exhausted this machine's RAM the first time
@@ -259,10 +260,10 @@ public sealed class BpeTokeniser
     /// </summary>
     private sealed class LinkedTokenStream : IDisposable
     {
-        public required MappedInt32Array Token;
-        public required MappedInt32Array Next;
-        public required MappedInt32Array Prev;
-        public required MappedInt32Array PairNext;
+        public required MappedArray<int> Token;
+        public required MappedArray<int> Next;
+        public required MappedArray<int> Prev;
+        public required MappedArray<int> PairNext;
         public required int Length;
 
         public static LinkedTokenStream Build(IEnumerable<string> filePaths, string scratchDirectory)
@@ -273,10 +274,10 @@ public sealed class BpeTokeniser
                 .ToList();
 
             int total = documents.Sum(d => d.Length);
-            var token = new MappedInt32Array(total, scratchDirectory);
-            var next = new MappedInt32Array(total, scratchDirectory);
-            var prev = new MappedInt32Array(total, scratchDirectory);
-            var pairNext = new MappedInt32Array(total, scratchDirectory);
+            var token = new MappedArray<int>(total, scratchDirectory);
+            var next = new MappedArray<int>(total, scratchDirectory);
+            var prev = new MappedArray<int>(total, scratchDirectory);
+            var pairNext = new MappedArray<int>(total, scratchDirectory);
 
             int offset = 0;
             foreach (var doc in documents)

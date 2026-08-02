@@ -1,7 +1,7 @@
 using Tokeniser;
 
 // The corpus itself lives in memory-mapped scratch files (see
-// MappedInt32Array / LinkedTokenStream) rather than the managed heap, so
+// MappedArray<int> / LinkedTokenStream) rather than the managed heap, so
 // training doesn't need a RAM budget check - the OS can reclaim those pages
 // under pressure instead of them threatening to OOM the machine. The one
 // real resource to guard is disk space for that scratch: 4 int32 arrays

@@ -12,13 +12,17 @@ before. Flagged explicitly on the tasks it matters most for below.
 ## Tensor + autodiff engine
 Required by: TASK-005, TASK-006, TASK-007, TASK-008, TASK-009
 
-- [ ] TASK-003: `Tensor` type — N-dimensional float array (shape, strides,
+- [x] TASK-003: `Tensor` type — N-dimensional float array (shape, strides,
   indexing) with elementwise ops (add, subtract, multiply, divide) and
   matmul, transpose, sum/mean-along-axis, broadcasting. Backing storage
   should be swappable between an in-heap array (small tensors) and a
   disk-backed store (large ones) so later tasks aren't locked into
   unbounded heap growth — see `src/Tokeniser/MappedInt32Array.cs` for the
-  established pattern.
+  established pattern. Done: `src/Tensor/`, backed by the shared
+  `Common.MappedArray<T>` (extracted from the tokeniser's
+  `MappedInt32Array` as part of this task, now used by both). Ops always
+  produce heap-backed results for now — routing large op results to disk
+  is left to whichever later task first needs it.
   Depends on: none
 - [ ] TASK-004: Reverse-mode autodiff — computation graph recording ops as
   they run, `Backward()` to propagate gradients, gradient accumulation.

@@ -1,8 +1,11 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Common/Common.csproj" />
+    <Project Path="src/Tensor/Tensor.csproj" />
     <Project Path="src/Tokeniser/Tokeniser.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Tensor.Tests/Tensor.Tests.csproj" />
     <Project Path="tests/Tokeniser.Tests/Tokeniser.Tests.csproj" />
   </Folder>
 </Solution>

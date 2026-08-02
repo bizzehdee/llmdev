@@ -63,6 +63,8 @@ dotnet test
 ### Project layout
 
 - `src/Tokeniser/BpeTokeniser.cs` — the tokeniser itself (training, encode, decode, save/load).
-- `src/Tokeniser/MappedInt32Array.cs` — disk-backed (memory-mapped) int array used for large-corpus training state.
 - `src/Tokeniser/Program.cs` — command-line entry point.
+- `src/Common/MappedArray.cs` — disk-backed (memory-mapped) array type shared by the tokeniser and the tensor engine.
+- `src/Tensor/` — the N-dimensional `Tensor` type (see PLAN.md/TASK.md).
 - `tests/Tokeniser.Tests/` — xUnit tests covering training, roundtrip encode/decode, and save/load.
+- `tests/Tensor.Tests/` — xUnit tests covering tensor construction, elementwise ops, broadcasting, matmul, transpose, and reductions.
