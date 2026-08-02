@@ -8,6 +8,95 @@ is written by hand so it's understood, not a black box behind a library call.
 See [PLAN.md](PLAN.md) for the full roadmap and [TASK.md](TASK.md) for
 current progress.
 
+## Full workflow: text → tokeniser → trained model → generated text
+
+There's a command-line tool for the tokeniser (step 1), but training and
+generation (steps 2–5) are library-only so far — no unified CLI exists yet.
+The example below is a small C# program that walks through the whole
+pipeline; paste it into a console project that references the `Tokeniser`,
+`Model`, `Training`, and `Generation` projects (see
+[Requirements](#requirements) and [Running the example](#running-the-example)
+below).
+
+### 1. Train a tokeniser (CLI)
+
+See [Tokeniser usage](#usage) below. This produces a `vocab.bpe` file.
+
+### 2–5. Train a model and generate text (code)
+
+```csharp
+using Model;
+using Tokeniser;
+using Training;
+using Generation;
+
+const string ScratchDirectory = "/home/you/.cache/llmdev-scratch"; // real disk, not /tmp - see Tokeniser usage notes below
+const string CorpusPath = "corpus.txt";
+
+// 2. Train (or load) a tokeniser, then encode the training corpus into a
+//    disk-backed token stream and a batch sampler over it.
+var tokeniser = new BpeTokeniser();
+tokeniser.Train([CorpusPath], targetVocabSize: 2000, ScratchDirectory);
+tokeniser.Save("vocab.bpe");
+
+var tokenIds = tokeniser.Encode(File.ReadAllText(CorpusPath));
+using var corpus = new TokenCorpus(tokenIds, ScratchDirectory);
+var sampler = new BatchSampler(corpus, contextLength: 64);
+
+// 3. Build a model and train it.
+var model = new GptModel(
+    vocabSize: tokeniser.VocabSize,
+    embeddingDim: 128,
+    numLayers: 4,
+    numHeads: 4,
+    maxSequenceLength: 64);
+
+var optimizer = new AdamWOptimizer(model.Parameters(), learningRate: 3e-4f);
+var trainer = new Trainer(model, sampler, optimizer);
+
+trainer.Run(steps: 2000, batchSize: 8, onStep: (step, loss) =>
+{
+    if (step % 100 == 0)
+    {
+        Console.WriteLine($"step {step}: loss {loss:F4}");
+    }
+});
+
+// 4. Checkpoint the trained model.
+ModelCheckpoint.Save(model, "model.checkpoint");
+
+// 5. Reload (possibly in a separate run/process) and generate text.
+var loadedModel = ModelCheckpoint.Load("model.checkpoint");
+var loadedTokeniser = BpeTokeniser.Load("vocab.bpe");
+
+string generated = TextGenerator.Generate(
+    loadedModel,
+    loadedTokeniser,
+    prompt: "Once upon a time",
+    maxNewTokens: 100,
+    options: new SamplingOptions { Temperature = 0.8f, TopK = 40 });
+
+Console.WriteLine(generated);
+```
+
+Notes on the numbers above: `embeddingDim`/`numLayers`/`numHeads`/`steps`
+are small, fast-to-run placeholders, not tuned hyperparameters — scale them
+up (and expect training to take much longer) for a model that produces
+coherent text. `contextLength`/`maxSequenceLength` must match between the
+sampler and the model. See PLAN.md's "Known limitations / deferred" section
+for trade-offs (e.g. no KV-cache, so generation gets slower per token as
+the sequence grows) worth knowing about before scaling this up.
+
+### Running the example
+
+```bash
+dotnet new console -o MyTraining
+cd MyTraining
+dotnet add reference ../src/Tokeniser/Tokeniser.csproj ../src/Model/Model.csproj ../src/Training/Training.csproj ../src/Generation/Generation.csproj
+# paste the code above into Program.cs, adjust CorpusPath/ScratchDirectory
+dotnet run
+```
+
 ## Tokeniser (done)
 
 A from-scratch byte-level Byte-Pair Encoding (BPE) tokeniser.
