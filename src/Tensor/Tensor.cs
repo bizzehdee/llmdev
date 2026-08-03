@@ -53,6 +53,64 @@ public sealed partial class Tensor : IDisposable
     public static Tensor ZerosOnDisk(int[] shape, string scratchDirectory) =>
         new(new MappedFloatBuffer(Count(shape), scratchDirectory), shape);
 
+    /// <summary>TASK-034: a device-resident tensor, backed by <see cref="GpuFloatBuffer"/>.</summary>
+    public static Tensor ZerosOnGpu(int[] shape) => new(new GpuFloatBuffer(Count(shape)), shape);
+
+    /// <summary>Whether this tensor's storage is device-resident (<see cref="GpuFloatBuffer"/>) - true only after <see cref="ZerosOnGpu"/> or <see cref="ToGpu"/>.</summary>
+    public bool IsGpuResident => _buffer is GpuFloatBuffer;
+
+    /// <summary>
+    /// Returns a device-resident copy of this tensor's data - one bulk
+    /// host→device transfer via <see cref="GpuFloatBuffer.CopyFromHost"/>
+    /// when this tensor already exposes a contiguous host span
+    /// (<see cref="IFloatBuffer.TryGetSpan"/>), or a slow, correctness-only
+    /// element-by-element copy for a disk-backed source (rare - a
+    /// disk-backed tensor is deliberately not meant to move onto a GPU in
+    /// bulk anyway; TASK-032's own scoping already excludes it from the
+    /// GPU matmul path for the same reason). A no-op (returns this same
+    /// instance) if already device-resident.
+    /// </summary>
+    public Tensor ToGpu()
+    {
+        if (IsGpuResident)
+        {
+            return this;
+        }
+
+        var gpuBuffer = new GpuFloatBuffer(Length);
+        if (_buffer.TryGetSpan(out var hostSpan))
+        {
+            gpuBuffer.CopyFromHost(hostSpan);
+        }
+        else
+        {
+            for (int i = 0; i < Length; i++)
+            {
+                gpuBuffer[i] = _buffer[i];
+            }
+        }
+
+        return new Tensor(gpuBuffer, Shape);
+    }
+
+    /// <summary>
+    /// Returns a heap-backed copy of this tensor's data - the inverse of
+    /// <see cref="ToGpu"/>, one bulk device→host transfer. A no-op
+    /// (returns this same instance) if not device-resident.
+    /// </summary>
+    public Tensor ToHost()
+    {
+        if (_buffer is not GpuFloatBuffer gpuBuffer)
+        {
+            return this;
+        }
+
+        var result = Zeros(Shape);
+        result._buffer.TryGetSpan(out var hostSpan); // Zeros() is always heap-backed.
+        gpuBuffer.CopyToHost(hostSpan);
+        return result;
+    }
+
     public static Tensor FromValues(float[] values, int[] shape)
     {
         int expected = Count(shape);

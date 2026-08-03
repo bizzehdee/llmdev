@@ -1285,7 +1285,7 @@ is a real architecture change - a genuinely new storage location for
 tasks: storage plumbing first, then chaining ops on-device, then wiring
 that through an actual training run.
 
-- [ ] TASK-034: Device-resident `IFloatBuffer` for GPU tensors - the
+- [x] TASK-034: Device-resident `IFloatBuffer` for GPU tensors - the
   foundational storage piece, no op changes yet. A new implementation
   (e.g. `GpuFloatBuffer`) backed by an ILGPU device memory buffer
   (`MemoryBuffer1D<float, Stride1D.Dense>`) whose lifetime spans the
@@ -1312,6 +1312,38 @@ that through an actual training run.
   yet - that's TASK-035.
   Depends on: TASK-031
   Required by: TASK-035
+
+  **Done:** new `Tensor.GpuFloatBuffer`, an `IFloatBuffer` backed by an
+  ILGPU `MemoryBuffer1D<float, Stride1D.Dense>`, allocated via
+  `GpuContext.GetAccelerator(allowCpuFallback: true)` - same policy as
+  `MatMulGpu`: this buffer's job is holding data on whatever accelerator
+  is available, not refusing if it isn't a real GPU (that's the CLI's
+  job). `Tensor.ZerosOnGpu(shape)` mirrors `Zeros`/`ZerosOnDisk`;
+  `Tensor.ToGpu()`/`ToHost()` do one bulk host↔device transfer each way
+  (a no-op returning the same instance if already on the right side), via
+  new `GpuFloatBuffer.CopyFromHost`/`CopyToHost` methods rather than the
+  slow per-element indexer. Found and fixed a real correctness gap while
+  writing this: ILGPU's `Allocate1D` does *not* zero-initialize (confirmed
+  via ILGPU's own `MemSetToZero` existing as a separate, opt-in step) -
+  unlike `HeapFloatBuffer`'s `new float[length]` and
+  `MappedFloatBuffer`'s fresh scratch file, both of which do - so
+  `GpuFloatBuffer`'s constructor now calls `MemSetToZero()` explicitly to
+  match that guarantee, rather than silently exposing whatever was
+  already in that device memory. `TryGetSpan` always declines, same
+  policy and reasoning as `MappedFloatBuffer`; confirmed (not just
+  assumed) that this alone is sufficient for `MatMulGpu`/`MatMulOptimised`
+  to correctly fall back to scalar for a device-resident operand, with no
+  dispatch-logic changes needed - both already gate on `TryGetSpan`.
+  Tests: `GpuFloatBufferTests` covers indexer round-tripping, zero-init,
+  bulk copy round-tripping, and `TryGetSpan` always declining;
+  `TensorTests` covers `ZerosOnGpu`/`ToGpu`/`ToHost` (including
+  round-tripping a disk-backed source and the same-instance no-op cases)
+  and a `MatMul` under `TensorBackend.Gpu` with a GPU-resident operand
+  falling back to scalar and staying correct - mirroring the existing
+  disk-backed-operand test exactly. All of this ran against the real AMD
+  GPU via OpenCL (TASK-031/033's driver fix), not ILGPU's CPU accelerator.
+  Solution-wide: 446 tests passing; `Tensor.GpuFloatBuffer` at 100%
+  branch coverage.
 
 - [ ] TASK-035: Chain matmul (and the other ops in a transformer block's
   hot path - elementwise add/multiply for bias and residual connections,

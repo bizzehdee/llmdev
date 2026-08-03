@@ -571,6 +571,86 @@ public class TensorTests
         }
     }
 
+    // TASK-034: device-resident storage plumbing. No op yet knows how to
+    // consume a device-resident operand without a host round-trip
+    // (TASK-035) - existing ops must still decline it and fall back to
+    // scalar correctly, the same way they already do for a disk-backed
+    // operand, since GpuFloatBuffer.TryGetSpan also always declines.
+
+    [Fact]
+    public void ZerosOnGpu_IsGpuResidentAndZeroInitialised()
+    {
+        using var tensor = Tensor.ZerosOnGpu([2, 2]);
+
+        Assert.True(tensor.IsGpuResident);
+        Assert.Equal(new float[] { 0, 0, 0, 0 }, tensor.ToArray());
+    }
+
+    [Fact]
+    public void ToGpu_ThenToHost_RoundTripsAHeapBackedTensorExactly()
+    {
+        using var original = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        using var gpu = original.ToGpu();
+        Assert.True(gpu.IsGpuResident);
+
+        using var backOnHost = gpu.ToHost();
+        Assert.False(backOnHost.IsGpuResident);
+        Assert.Equal(original.ToArray(), backOnHost.ToArray());
+    }
+
+    [Fact]
+    public void ToGpu_ThenToHost_RoundTripsADiskBackedTensorExactly()
+    {
+        using var disk = Tensor.ZerosOnDisk([2, 2], ScratchDirectory);
+        disk[0, 0] = 5; disk[0, 1] = 6; disk[1, 0] = 7; disk[1, 1] = 8;
+
+        using var gpu = disk.ToGpu();
+        Assert.True(gpu.IsGpuResident);
+
+        using var backOnHost = gpu.ToHost();
+        Assert.Equal(new float[] { 5, 6, 7, 8 }, backOnHost.ToArray());
+    }
+
+    [Fact]
+    public void ToGpu_OnAnAlreadyGpuResidentTensor_ReturnsTheSameInstance()
+    {
+        using var gpu = Tensor.ZerosOnGpu([2, 2]);
+
+        var again = gpu.ToGpu();
+
+        Assert.Same(gpu, again);
+    }
+
+    [Fact]
+    public void ToHost_OnAHeapBackedTensor_ReturnsTheSameInstance()
+    {
+        using var heap = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        var again = heap.ToHost();
+
+        Assert.Same(heap, again);
+    }
+
+    [Fact]
+    public void MatMul_GpuResidentOperand_FallsBackToScalarAndStaysCorrectUnderGpuBackend()
+    {
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            using var heap = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+            using var gpuResident = Tensor.FromValues([5, 6, 7, 8], [2, 2]).ToGpu();
+
+            using var result = heap.MatMul(gpuResident);
+
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
     [Fact]
     public void Concat_AlongAxisZero_AppendsRows()
     {
