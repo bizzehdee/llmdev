@@ -1112,7 +1112,7 @@ CLI/demo integration.
   and `Shutdown` (forces a fresh one next call). `Tensor` assembly:
   `GpuContext` at 100% branch coverage; solution-wide 421 tests passing.
 
-- [ ] TASK-032: A real GPU-accelerated matmul kernel via ILGPU - the actual
+- [x] TASK-032: A real GPU-accelerated matmul kernel via ILGPU - the actual
   math, building on TASK-031's plumbing. Matmul first, per TASK-015's own
   priority reasoning (O(n³) dominates a transformer forward/backward pass;
   elementwise ops are a stretch goal, not required for this to be worth
@@ -1137,6 +1137,56 @@ CLI/demo integration.
   card via OpenCL), since CI can't be assumed to have one.
   Depends on: TASK-031
   Required by: TASK-033
+
+  **Done:** kept the scope decision explicit and separate from
+  `GpuContext.GetAccelerator`'s own strictness: `Tensor.MatMulGpu` always
+  calls `GetAccelerator(allowCpuFallback: true)` - its job is "compute the
+  right answer on whatever accelerator is available," not "refuse if it's
+  not a real GPU" (that stricter check belongs to a caller *choosing*
+  `TensorBackend.Gpu` in the first place, i.e. TASK-033's CLI flag, not to
+  every individual matmul call once it's already selected). New
+  `Tensor.MatMul.Gpu.cs`: `MatMulGpu` mirrors `MatMulScalar`'s exact batch/
+  broadcast math (same `MapBroadcastFlatIndex`-based per-batch offset
+  computation) but launches one ILGPU kernel across every
+  (batch*row, column) pair at once, rather than a CPU loop over rows - a
+  kernel indexes strided device memory directly, so (unlike
+  `MatMulOptimised`'s SIMD approach) no "transpose for a contiguous span"
+  trick is needed. Device buffers for `a`/`b`/per-batch offsets/output are
+  a genuinely new storage location, scoped (like TASK-015) to heap-backed
+  operands only - falls back to `MatMulScalar` defensively if either isn't
+  (`Zeros()` always is, in practice). The compiled kernel is cached per
+  accelerator instance (`GetMatMulKernel`) since ILGPU compilation is real,
+  non-trivial cost that shouldn't repeat every call.
+
+  **Confirmed real, not assumed:** Coverlet's IL instrumentation is
+  genuinely incompatible with ILGPU's kernel compilation - instrumenting
+  `MatMulKernel`'s IL makes ILGPU's IR importer throw
+  `InternalCompilerException`, even though the exact same code runs and
+  passes correctly under plain `dotnet test` (no coverage collection).
+  Root-caused (not worked around blindly) by running coverage collection
+  in isolation, seeing every `Gpu`-backend test fail only under
+  instrumentation, and confirming the same tests pass cleanly without it.
+  Resolved by `[ExcludeFromCodeCoverage]` on `MatMulKernel` specifically
+  (not the surrounding wrapper) - mirrors this project's existing
+  precedent of excluding what a tool genuinely cannot measure (e.g.
+  `Program.cs` composition roots), not a correctness or test-coverage
+  compromise: the method is still fully exercised by real, passing tests.
+
+  Existing `MatMul_*` (`TensorTests`) and `MatMul_*_GradientMatchesFiniteDifference`
+  (`VariableTests`) theories gained a `TensorBackend.Gpu` case each,
+  exactly the same test bodies TASK-015 already used for `Optimised` - no
+  separate GPU-only suite. `Tensor.GpuContext` and `Tensor.Tests`/
+  `Variable.Tests` share a named xUnit collection (`GpuContextTests`
+  deliberately calls `GpuContext.Shutdown()`, which would otherwise race
+  against a concurrently-running `Gpu`-backend matmul test in a different,
+  parallel-by-default test class touching the same process-wide
+  accelerator). On this specific dev machine, every `Gpu` case actually
+  runs against ILGPU's CPU accelerator (see TASK-031's note on the missing
+  OpenCL driver) - documented plainly in `TensorTests.cs` so this proves
+  the kernel's math, not that it was verified against real GPU hardware;
+  anyone with a working CUDA/OpenCL setup can re-run the same suite
+  unchanged to additionally confirm that. Solution-wide: 431 tests
+  passing; `Tensor.GpuContext` 100%, `Tensor.Tensor` 99.2% branch coverage.
 
 - [ ] TASK-033: Wire the GPU backend into a CLI and demonstrate it end to
   end in README.md (a new stage 11 section, mirroring stage 9's

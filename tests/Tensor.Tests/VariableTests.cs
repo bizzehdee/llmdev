@@ -3,6 +3,7 @@ using Xunit;
 
 namespace Tensor.Tests;
 
+[Collection("GpuContext")]
 public class VariableTests
 {
     [Fact]
@@ -118,6 +119,7 @@ public class VariableTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_TwoDimensional_GradientMatchesFiniteDifference(TensorBackend backend)
     {
         Tensor.Backend = backend;
@@ -136,6 +138,7 @@ public class VariableTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_Batched_GradientMatchesFiniteDifference(TensorBackend backend)
     {
         Tensor.Backend = backend;
@@ -154,6 +157,7 @@ public class VariableTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_BroadcastBatch_GradientMatchesFiniteDifference(TensorBackend backend)
     {
         Tensor.Backend = backend;

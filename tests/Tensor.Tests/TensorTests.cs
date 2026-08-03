@@ -3,6 +3,7 @@ using Xunit;
 
 namespace Tensor.Tests;
 
+[Collection("GpuContext")]
 public class TensorTests
 {
     private static readonly string ScratchDirectory = Path.Combine(Path.GetTempPath(), "tensor-tests-scratch");
@@ -177,15 +178,25 @@ public class TensorTests
         Assert.Throws<InvalidOperationException>(() => a.Add(b));
     }
 
-    // MatMul is tested against both TensorBackend values throughout (TASK-015's
-    // own instruction: prove correctness by running the *existing* test suite
-    // against both backends, not a separate smaller one for the fast path).
-    // Tensor.Backend is AsyncLocal-backed specifically so this doesn't leak
-    // into other concurrently-running tests - see Tensor.cs's doc comment.
+    // MatMul is tested against all three TensorBackend values throughout
+    // (TASK-015's own instruction, extended to TASK-032's Gpu backend: prove
+    // correctness by running the *existing* test suite against every backend,
+    // not a separate smaller one for the fast path). Tensor.Backend is
+    // AsyncLocal-backed specifically so this doesn't leak into other
+    // concurrently-running tests - see Tensor.cs's doc comment. The Gpu cases
+    // run against whatever GpuContext.GetAccelerator(allowCpuFallback: true)
+    // resolves to - ILGPU's CPU accelerator on this machine (confirmed: no
+    // working OpenCL driver despite the AMD GPU/ICD registration being
+    // present, see GpuContext's own doc comment) - so they prove the kernel's
+    // *math* is correct, not that it was actually re-run against real GPU
+    // hardware. Anyone with a working CUDA/OpenCL setup should re-run this
+    // whole suite once to additionally confirm that (no code change needed -
+    // GetAccelerator already prefers a real GPU over CPU whenever one exists).
 
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_TwoByTwoKnownResult(TensorBackend backend)
     {
         Tensor.Backend = backend;
@@ -209,6 +220,7 @@ public class TensorTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_NonSquareShapes(TensorBackend backend)
     {
         Tensor.Backend = backend;
@@ -234,6 +246,7 @@ public class TensorTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_BatchedAgainstSingleMatrixBroadcasts(TensorBackend backend)
     {
         Tensor.Backend = backend;
@@ -286,6 +299,7 @@ public class TensorTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_ManyRows_UsesParallelPathAndMatchesReferenceImplementation(TensorBackend backend)
     {
         // TASK-021: 100 output rows clears MinRowsForParallelMatMul, so this
@@ -336,6 +350,7 @@ public class TensorTests
     [Theory]
     [InlineData(TensorBackend.Scalar)]
     [InlineData(TensorBackend.Optimised)]
+    [InlineData(TensorBackend.Gpu)]
     public void MatMul_ManyRows_IsDeterministicAcrossRepeatedCalls(TensorBackend backend)
     {
         // Parallelising independent output rows must not make the result

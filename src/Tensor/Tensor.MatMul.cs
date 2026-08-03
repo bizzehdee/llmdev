@@ -68,6 +68,13 @@ public sealed partial class Tensor
             return MatMulOptimised(other, batchShape, aBatchShape, bBatchShape, m, k, n, outShape);
         }
 
+        if (Backend == TensorBackend.Gpu
+            && _buffer.TryGetSpan(out _)
+            && other._buffer.TryGetSpan(out _))
+        {
+            return MatMulGpu(other, batchShape, aBatchShape, bBatchShape, m, k, n, outShape);
+        }
+
         return MatMulScalar(other, batchShape, aBatchShape, bBatchShape, m, k, n, outShape);
     }
 

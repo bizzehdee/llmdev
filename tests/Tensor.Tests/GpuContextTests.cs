@@ -3,6 +3,7 @@ using Xunit;
 
 namespace Tensor.Tests;
 
+[Collection("GpuContext")]
 public class GpuContextTests
 {
     // TASK-031: ValidateAccelerator is a pure function of AcceleratorType
