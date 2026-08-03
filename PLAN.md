@@ -298,13 +298,20 @@ Flagged while answering a question about scaling to a real (~230 MB, 250
 book) corpus and dataset - both are genuine gaps at that scale, not
 theoretical:
 
-- **`LinkedTokenStream.Build` loads the whole input file onto the heap**
-  via `File.ReadAllText` before anything reaches disk-backed storage - the
-  "honest surprise" README.md's memory/disk footprint section documents
-  (peak RAM scales with input size in both `BpeTokeniser.Train` and
-  `EncodeBulk`, not just disk). Fine at the few-MB scale measured so far;
-  a genuinely large corpus (hundreds of MB) would need tens of GB of RAM
-  with today's implementation. → TASK-029.
+- **`LinkedTokenStream.Build` loaded the whole input file onto the heap**
+  via `File.ReadAllText` before anything reached disk-backed storage - the
+  "honest surprise" README.md's memory/disk footprint section documented
+  (peak RAM scaled with input size in both `BpeTokeniser.Train` and
+  `EncodeBulk`, not just disk). → TASK-029, now fixed: `Build` streams each
+  file via `PreTokeniser.Split(TextReader, bufferSize)` in two passes
+  (count exact bytes, then fill) instead of holding it all in memory at
+  once. Re-measured at 2/4/10/100 MB in README.md's footprint section -
+  meaningfully lower peak RAM at every size (roughly halved at 10 MB), and
+  no longer scaling anywhere near as steeply; what residual growth remains
+  is the disk-backed arrays' own resident *write* working set (matches the
+  existing 16-bytes-per-input-byte scratch formula), which is reclaimable
+  by the OS unlike the old heap string, not a leftover version of the same
+  bug.
 - **The SFT CLI's `--steps`/`--batch-size` don't scale to a real dataset.**
   The 6-example demo works by setting `--batch-size` equal to the dataset
   size; a dataset of hundreds or thousands of (instruction, response)

@@ -920,7 +920,7 @@ the SFT CLI's current `--steps`/`--batch-size` flags are a fine fit for the
 6-example demo dataset but don't scale well to a dataset with hundreds or
 thousands of examples.
 
-- [ ] TASK-029: Stream `LinkedTokenStream.Build`'s input instead of
+- [x] TASK-029: Stream `LinkedTokenStream.Build`'s input instead of
   `File.ReadAllText` - the root cause identified in README.md's memory/disk
   footprint section: `BpeTokeniser.Train` and `EncodeBulk` both go through
   `LinkedTokenStream.Build`, which reads an entire input file into one
@@ -946,6 +946,37 @@ thousands of examples.
   100 MB+, to actually demonstrate flat RAM where the old numbers would
   have shown it climbing).
   Depends on: TASK-001, TASK-018, TASK-022
+
+  **Done:** new `PreTokeniser.Split(TextReader reader, int bufferSize = 1 << 20)`
+  reads bounded-size blocks and regex-matches `pending + block` each time;
+  every match except the last found in a block is guaranteed complete (no
+  later text can retroactively change where an already-terminated run
+  ended - only the last match, if it's one of the pattern's unbounded-length
+  alternatives, could still be continuing into the next block), so only
+  that one gets held back as `pending` and re-scanned with the next block.
+  `LinkedTokenStream.Build` now does two streaming passes per file - a
+  first pass counting exact UTF-8 byte totals (`GetByteCount`, no
+  allocation) to size the `MappedArray<T>`s precisely, a second pass
+  actually encoding and filling them - instead of one `File.ReadAllText`
+  pass. Twice the disk I/O, but peak heap no longer holds an entire file's
+  text at once. Tested: `PreTokeniserTests` proves the streaming overload
+  matches the in-memory one byte-for-byte across buffer sizes from 1 up to
+  64 (including one deliberately smaller than a real word, to prove a
+  chunk spanning many tiny blocks still comes back whole), plus an
+  empty-reader case; full existing `BpeTokeniserTests`/`TokeniserCliTests`
+  suites pass unchanged against the new streaming `Build`, proving output
+  parity. Re-measured README.md's memory/disk footprint section at
+  2/4/10/100 MB (`/usr/bin/time -v`, same methodology as before): peak RAM
+  roughly halved at 10 MB (~840 MB → ~373 MB) and no longer scales anywhere
+  near as steeply (a 100 MB corpus, which would have extrapolated to
+  ~18 GB under the old code, now measures ~1.8 GB). Documented honestly
+  that peak RAM still isn't perfectly flat - the disk-backed arrays'
+  *write* working set still tracks corpus size (matching the existing
+  16-bytes-per-input-byte scratch-estimate formula) - but those pages are
+  OS-reclaimable under memory pressure, unlike the old unreclaimable heap
+  string, which is what the disk-backed design was meant to buy in the
+  first place. Solution-wide test suite: 396 passing; `Tokeniser` assembly
+  at 95.7% branch coverage (`PreTokeniser` 100%, `BpeTokeniser` 98.8%).
 
 - [ ] TASK-030: Automatic epoch-based training for the SFT CLI - today
   `SftCli` takes a raw `--steps`/`--batch-size` pair with no relationship

@@ -56,4 +56,53 @@ public class PreTokeniserTests
 
         Assert.Equal(text, string.Concat(chunks));
     }
+
+    // TASK-029: the streaming TextReader overload must chunk identically to
+    // the in-memory string overload, however small the read buffer - the
+    // whole point is that a chunk spanning a block boundary is still
+    // returned whole, never split.
+
+    [Theory]
+    [InlineData("hello world")]
+    [InlineData("don't stop 12345 times!!")]
+    [InlineData("  leading and trailing whitespace   ")]
+    [InlineData("emoji test \U0001F600 done")]
+    [InlineData("CJK text: 你好世界")]
+    [InlineData("")]
+    [InlineData("\n\n\nmultiple newlines\n\n\n")]
+    [InlineData("a repeated word word word word word word word word word word end")]
+    public void Split_StreamOverload_MatchesInMemoryOverload_AcrossVariousBufferSizes(string text)
+    {
+        var expected = PreTokeniser.Split(text).ToList();
+
+        foreach (int bufferSize in new[] { 1, 2, 3, 5, 64 })
+        {
+            using var reader = new StringReader(text);
+            var actual = PreTokeniser.Split(reader, bufferSize).ToList();
+
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
+    public void Split_StreamOverload_WordSpanningManyTinyBlocksStaysOneChunk()
+    {
+        string text = "supercalifragilisticexpialidocious and more";
+
+        using var reader = new StringReader(text);
+        var chunks = PreTokeniser.Split(reader, bufferSize: 1).ToList();
+
+        Assert.Contains("supercalifragilisticexpialidocious", chunks);
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
+    [Fact]
+    public void Split_StreamOverload_EmptyReaderProducesNoChunks()
+    {
+        using var reader = new StringReader("");
+
+        var chunks = PreTokeniser.Split(reader).ToList();
+
+        Assert.Empty(chunks);
+    }
 }

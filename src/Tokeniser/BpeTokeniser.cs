@@ -279,34 +279,60 @@ public sealed class BpeTokeniser
         /// contributes no pairs but must still appear in the output, or
         /// <see cref="EncodeBulk"/> would silently drop it.
         /// </summary>
+        /// <remarks>
+        /// TASK-029: reads each file twice via <see cref="PreTokeniser.Split(TextReader, int)"/>
+        /// instead of once via <c>File.ReadAllText</c> - the first pass only
+        /// counts each chunk's UTF-8 byte length (<c>GetByteCount</c>, no
+        /// allocation) to size the <see cref="MappedArray{T}"/>s exactly;
+        /// the second pass actually encodes and fills them. Twice the disk
+        /// I/O (cheap) buys peak heap usage that no longer scales with
+        /// input file size - the whole point, since the old single-pass
+        /// version held an entire file's text on the heap as one string
+        /// before anything reached disk-backed storage.
+        /// </remarks>
         public static LinkedTokenStream Build(IEnumerable<string> filePaths, string scratchDirectory)
         {
-            var documents = filePaths
-                .SelectMany(path => PreTokeniser.Split(File.ReadAllText(path)))
-                .Select(chunk => Encoding.UTF8.GetBytes(chunk))
-                .Where(bytes => bytes.Length > 0)
-                .ToList();
+            var paths = filePaths as IReadOnlyList<string> ?? filePaths.ToList();
 
-            int total = documents.Sum(d => d.Length);
-            var token = new MappedArray<int>(total, scratchDirectory);
-            var next = new MappedArray<int>(total, scratchDirectory);
-            var prev = new MappedArray<int>(total, scratchDirectory);
-            var pairNext = new MappedArray<int>(total, scratchDirectory);
-
-            int offset = 0;
-            foreach (var doc in documents)
+            long total = 0;
+            foreach (var path in paths)
             {
-                for (int i = 0; i < doc.Length; i++)
+                using var reader = new StreamReader(path);
+                foreach (var chunk in PreTokeniser.Split(reader))
                 {
-                    int index = offset + i;
-                    token[index] = doc[i];
-                    prev[index] = i == 0 ? -1 : index - 1;
-                    next[index] = i == doc.Length - 1 ? -1 : index + 1;
+                    total += Encoding.UTF8.GetByteCount(chunk);
                 }
-                offset += doc.Length;
             }
 
-            return new LinkedTokenStream { Token = token, Next = next, Prev = prev, PairNext = pairNext, Length = total };
+            var token = new MappedArray<int>((int)total, scratchDirectory);
+            var next = new MappedArray<int>((int)total, scratchDirectory);
+            var prev = new MappedArray<int>((int)total, scratchDirectory);
+            var pairNext = new MappedArray<int>((int)total, scratchDirectory);
+
+            int offset = 0;
+            foreach (var path in paths)
+            {
+                using var reader = new StreamReader(path);
+                foreach (var chunk in PreTokeniser.Split(reader))
+                {
+                    var bytes = Encoding.UTF8.GetBytes(chunk);
+                    if (bytes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i < bytes.Length; i++)
+                    {
+                        int index = offset + i;
+                        token[index] = bytes[i];
+                        prev[index] = i == 0 ? -1 : index - 1;
+                        next[index] = i == bytes.Length - 1 ? -1 : index + 1;
+                    }
+                    offset += bytes.Length;
+                }
+            }
+
+            return new LinkedTokenStream { Token = token, Next = next, Prev = prev, PairNext = pairNext, Length = offset };
         }
 
         public void Dispose()
