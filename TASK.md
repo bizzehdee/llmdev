@@ -390,7 +390,7 @@ end rather than re-numbered into size order).
   97.4%.
   Depends on: TASK-004, TASK-011
 
-- [ ] TASK-018: Fast bulk-encode for `BpeTokeniser` - a second encode path
+- [x] TASK-018: Fast bulk-encode for `BpeTokeniser` - a second encode path
   that *applies* an already-learned merge table (no new merges learned,
   unlike `Train`) but reuses `Train`'s disk-backed intrusive-linked-list
   approach instead of `Encode`'s simple repeated merge-scan, so it scales
@@ -400,6 +400,29 @@ end rather than re-numbered into size order).
   path. Needs its own correctness tests (same output as `Encode` for
   inputs `Encode` can still handle, just faster) rather than assuming
   parity with `Train`'s different algorithm.
+  Done: `BpeTokeniser.EncodeBulk` (`src/Tokeniser/BpeTokeniser.cs`) builds
+  the same `LinkedTokenStream` `Train` uses, threads an intrusive
+  occurrence chain per *known* merge pair, then applies merges in a
+  single ascending pass over `_mergeRank` (no priority queue needed,
+  since any pair a merge creates involves a token id that didn't exist
+  until that merge ran, so it can only ever match a later merge).
+  Returns a new `EncodedCorpus` (disk-backed via `MappedArray<int>`,
+  over-allocated to the input's raw byte count as an upper bound).
+  Deliberately driven off `_mergeRank` rather than the raw `_merges`
+  list - found and fixed a real bug while writing the parity tests:
+  `Train` can occasionally "learn" a merge for a pair that later reforms
+  elsewhere in the corpus and gets merged again under a new id, silently
+  overwriting that pair's `_mergeRank` entry and leaving the original
+  merge's id permanently unreachable from raw bytes (`Encode` only ever
+  consults `_mergeRank`, so it never produces that id either) - iterating
+  `_merges` directly would have resurrected that dead id and diverged
+  from `Encode`. Occurrences of the pair being merged are sorted into
+  ascending position order before applying (the intrusive chain itself
+  is LIFO) specifically to match `Encode`'s left-to-right, non-overlapping
+  merge semantics for repeated-byte runs (e.g. "aaa" merges the first two
+  bytes, not the last two). Verified via parity tests against `Encode`
+  (multi-document corpora, an odd-length repeated-byte run, file-boundary
+  non-merging, empty input, and `EncodedCorpus`'s out-of-range indexer).
   Depends on: TASK-002
 
 - [ ] TASK-019: Optional disk-backed AdamW moment estimates - a

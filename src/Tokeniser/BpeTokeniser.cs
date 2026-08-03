@@ -339,6 +339,138 @@ public sealed class BpeTokeniser
         return ids;
     }
 
+    /// <summary>
+    /// Bulk-encodes an entire corpus using the already-learned merge table
+    /// (no new merges are learned - unlike <see cref="Train"/>, which this
+    /// reuses <see cref="LinkedTokenStream"/> from). <see cref="Encode"/>'s
+    /// repeated full-rescan approach is fine for a short prompt but doesn't
+    /// scale to a large corpus; this instead threads together, per known
+    /// merge pair, an intrusive occurrence chain the same way <see cref="Train"/>
+    /// does for candidate pairs, except every merge's rank is already fixed,
+    /// so a single ascending pass over <see cref="_mergeRank"/> (by rank) -
+    /// no priority queue needed - is enough: any pair a merge creates
+    /// necessarily involves a token id that didn't exist until that merge
+    /// ran, so it can only ever match a *later* merge, never an earlier
+    /// one already passed over.
+    ///
+    /// Deliberately drives this off <see cref="_mergeRank"/> rather than
+    /// the raw <see cref="_merges"/> list: <see cref="Train"/> can
+    /// occasionally learn a merge for a pair value that later reforms
+    /// elsewhere in the corpus and gets "learned" again under a new id,
+    /// which overwrites that pair's entry in <see cref="_mergeRank"/> -
+    /// leaving the original <see cref="_merges"/> slot's id permanently
+    /// unreachable from raw bytes (<see cref="Encode"/> only ever
+    /// consults <see cref="_mergeRank"/>, so it never produces that id
+    /// either). Iterating <see cref="_merges"/> directly would resurrect
+    /// that dead id and diverge from <see cref="Encode"/>.
+    ///
+    /// Produces byte-for-byte the same token ids <see cref="Encode"/> would
+    /// for the same text (verified by test, not just "a valid
+    /// tokenisation") - occurrences of the pair currently being merged are
+    /// processed in ascending position order specifically to match
+    /// <see cref="MergePairInPlace"/>'s left-to-right, non-overlapping
+    /// merge semantics (e.g. a run of three identical bytes merges the
+    /// first two, not the last two - the chain itself doesn't preserve
+    /// this ordering, since new occurrences are prepended as they're
+    /// discovered, so occurrences are explicitly sorted before merging).
+    /// </summary>
+    public EncodedCorpus EncodeBulk(IEnumerable<string> filePaths, string scratchDirectory)
+    {
+        using var state = LinkedTokenStream.Build(filePaths, scratchDirectory);
+        var pairHead = new Dictionary<(int Left, int Right), int>();
+
+        void LinkOccurrence(int leftIndex, (int Left, int Right) pair)
+        {
+            int previousHead = pairHead.TryGetValue(pair, out int h) ? h : -1;
+            state.PairNext[leftIndex] = previousHead;
+            pairHead[pair] = leftIndex;
+        }
+
+        void TryTrackPairAt(int leftIndex)
+        {
+            int rightIndex = state.Next[leftIndex];
+            if (rightIndex == -1)
+            {
+                return;
+            }
+
+            var pair = (state.Token[leftIndex], state.Token[rightIndex]);
+            if (_mergeRank.ContainsKey(pair))
+            {
+                LinkOccurrence(leftIndex, pair);
+            }
+        }
+
+        for (int i = 0; i < state.Length; i++)
+        {
+            TryTrackPairAt(i);
+        }
+
+        foreach (var (pair, rank) in _mergeRank.OrderBy(kv => kv.Value))
+        {
+            if (!pairHead.TryGetValue(pair, out int headNode))
+            {
+                continue;
+            }
+
+            int newId = _merges[rank].NewId;
+
+            var occurrences = new List<int>();
+            int node = headNode;
+            while (node != -1)
+            {
+                occurrences.Add(node);
+                node = state.PairNext[node];
+            }
+            occurrences.Sort();
+
+            foreach (int i in occurrences)
+            {
+                if (state.Token[i] != pair.Left)
+                {
+                    continue;
+                }
+
+                int j = state.Next[i];
+                if (j == -1 || state.Token[j] != pair.Right)
+                {
+                    continue;
+                }
+
+                int p = state.Prev[i];
+                int k = state.Next[j];
+
+                state.Token[i] = newId;
+                state.Token[j] = -1;
+                state.Next[i] = k;
+                if (k != -1)
+                {
+                    state.Prev[k] = i;
+                }
+
+                if (p != -1)
+                {
+                    TryTrackPairAt(p);
+                }
+                TryTrackPairAt(i);
+            }
+
+            pairHead.Remove(pair);
+        }
+
+        var output = new MappedArray<int>(state.Length, scratchDirectory);
+        int length = 0;
+        for (int i = 0; i < state.Length; i++)
+        {
+            if (state.Token[i] != -1)
+            {
+                output[length++] = state.Token[i];
+            }
+        }
+
+        return new EncodedCorpus(output, length);
+    }
+
     private static void MergePairInPlace(List<int> seq, (int Left, int Right) pair, int newId)
     {
         int write = 0;

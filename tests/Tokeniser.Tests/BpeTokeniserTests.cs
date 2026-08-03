@@ -167,6 +167,121 @@ public class BpeTokeniserTests
         }
     }
 
+    [Fact]
+    public void EncodeBulk_MatchesEncode_ForEachTrainingDocument()
+    {
+        // TASK-018: EncodeBulk must produce byte-for-byte the same token
+        // ids as Encode, not merely "a valid tokenisation" - including the
+        // odd-length-run case ("aaa") where processing order matters.
+        var pathA = WriteTempFile("the quick brown fox jumps over the lazy dog. the dog barks. the fox runs.");
+        var pathB = WriteTempFile("aaaaa bbbbb aaaaa bbbbb aaa bb a");
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { pathA, pathB }, targetVocabSize: 290, scratchDirectory: ScratchDirectory);
+
+            using var bulk = tokeniser.EncodeBulk(new[] { pathA, pathB }, ScratchDirectory);
+
+            var expectedA = tokeniser.Encode(File.ReadAllText(pathA));
+            var expectedB = tokeniser.Encode(File.ReadAllText(pathB));
+            var expected = expectedA.Concat(expectedB).ToList();
+
+            Assert.Equal(expected.Count, bulk.Length);
+            for (int i = 0; i < expected.Count; i++)
+            {
+                Assert.Equal(expected[i], bulk[i]);
+            }
+        }
+        finally
+        {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
+    }
+
+    [Fact]
+    public void EncodeBulk_OddLengthRepeatedByteRun_MatchesEncode()
+    {
+        // A run of an odd number of the same byte ("aaa") is the case where
+        // occurrence-processing order matters: Encode merges left-to-right
+        // (first two, not last two), so EncodeBulk must too.
+        var path = WriteTempFile(string.Concat(Enumerable.Repeat("aaa ", 40)));
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { path }, targetVocabSize: 260, scratchDirectory: ScratchDirectory);
+
+            using var bulk = tokeniser.EncodeBulk(new[] { path }, ScratchDirectory);
+            var expected = tokeniser.Encode(File.ReadAllText(path));
+
+            Assert.Equal(expected.Count, bulk.Length);
+            for (int i = 0; i < expected.Count; i++)
+            {
+                Assert.Equal(expected[i], bulk[i]);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void EncodeBulk_MultipleFilesDoNotMergeAcrossFileBoundaries()
+    {
+        var pathA = WriteTempFile("xyxyxyxyxyxyxyxyxyxy");
+        var pathB = WriteTempFile("zzzzzzzzzzzzzzzzzzzz");
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { pathA, pathB }, targetVocabSize: 260, scratchDirectory: ScratchDirectory);
+
+            using var bulk = tokeniser.EncodeBulk(new[] { pathA, pathB }, ScratchDirectory);
+            var expected = tokeniser.Encode("xyxyxyxyxyxyxyxyxyxy").Concat(tokeniser.Encode("zzzzzzzzzzzzzzzzzzzz")).ToList();
+
+            Assert.Equal(expected.Count, bulk.Length);
+            for (int i = 0; i < expected.Count; i++)
+            {
+                Assert.Equal(expected[i], bulk[i]);
+            }
+        }
+        finally
+        {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
+    }
+
+    [Fact]
+    public void EncodeBulk_EmptyFileList_ProducesEmptyResult()
+    {
+        var tokeniser = new BpeTokeniser();
+
+        using var bulk = tokeniser.EncodeBulk(Array.Empty<string>(), ScratchDirectory);
+
+        Assert.Equal(0, bulk.Length);
+    }
+
+    [Fact]
+    public void EncodedCorpus_IndexOutOfRangeThrows()
+    {
+        var path = WriteTempFile("hello world");
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { path }, targetVocabSize: 260, scratchDirectory: ScratchDirectory);
+
+            using var bulk = tokeniser.EncodeBulk(new[] { path }, ScratchDirectory);
+
+            Assert.Throws<IndexOutOfRangeException>(() => bulk[-1]);
+            Assert.Throws<IndexOutOfRangeException>(() => bulk[bulk.Length]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempFile(string contents)
     {
         var path = Path.GetTempFileName();
