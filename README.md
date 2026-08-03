@@ -14,8 +14,8 @@ This README is a lesson plan: one section per stage, each covering what
 problem the stage solves, what's actually happening conceptually, which
 source files to go read, and what to run to see it working. Every stage
 below is built and runnable today — see [Project status](#project-status)
-for the honest caveats worth knowing before you expect too much of it as a
-chatbot, or of its `--gpu` flag as a real GPU benchmark on every machine.
+for the honest caveat worth knowing before you expect too much of it as a
+chatbot.
 
 Stages are numbered in the order it makes sense to *approach* them, not the
 order they were originally built in — see [PLAN.md](PLAN.md) if you want the
@@ -673,43 +673,44 @@ CPU accelerator while claiming to demonstrate GPU execution - pass
 command, real output, both below). `--gpu` and `--optimised` select
 different backends and can't be combined.
 
-**Honest finding, measured on this machine, not assumed:** this project's
-own dev machine has a discrete AMD GPU (Radeon RX 6700 XT / Navi 22) and an
-OpenCL ICD registration for it - but the actual native OpenCL driver
-library the registration points at isn't installed in this development
-environment, so ILGPU only ever detects a CPU accelerator here (confirmed
-directly - see `--gpu`'s strict-mode output below). That's a genuine,
-specific-to-this-environment limitation, not a design flaw in the code:
-`GetAccelerator` already prefers a real GPU whenever `Context.Devices`
-reports one, no code change needed on a machine with a working driver.
-Since a real GPU genuinely isn't reachable here, the wall-clock comparison
-below necessarily compares scalar/optimised CPU paths against ILGPU's *own*
-CPU accelerator, not real GPU silicon - and even so, it's still a real,
-informative result: on this toy-sized demo model, running the exact same
-30 training steps, GPU execution (`--gpu-allow-cpu-fallback`) was **slower**
-than either CPU path (35.5s vs. 25.4s scalar, 24.3s optimised) - host↔device
-buffer allocation/transfer overhead on every single matmul call dominates
-at this scale, before any parallel-execution advantage a real GPU might
-otherwise provide has a chance to pay for itself. This is exactly the kind
-of result worth reporting plainly rather than only publishing a flattering
-number - the same honesty this README's memory/disk footprint section
-already commits to.
+**Honest finding, measured on this machine, not assumed - and revised once
+already, exactly because of what "measured, not assumed" actually
+requires:** this project's dev machine has a discrete AMD GPU (Radeon
+RX 6750 XT / Navi 22 - `gfx1030`). The first time this section was written,
+that GPU genuinely wasn't reachable: an OpenCL ICD registration existed,
+but the native runtime library it pointed at wasn't installed, so ILGPU
+only ever found a CPU accelerator. Root-caused (not worked around) down to
+one specific missing package: `clinfo` could already see the GPU via
+`libOpenCL.so.1`, but .NET's native-library probing for ILGPU's OpenCL
+P/Invoke layer needed the unversioned `libOpenCL.so` symlink, which only
+the `-devel` package (`ocl-icd-devel`) provides on this Fedora machine -
+installing it (`sudo dnf install ocl-icd-devel`) fixed detection
+immediately, with no code change. Real GPU execution below is the result
+of that fix, re-measured afterwards - the numbers in the first version of
+this section (GPU slower than either CPU path, via ILGPU's CPU accelerator)
+are superseded, not still true.
 
 **Source files:** `src/Tensor/GpuContext.cs`, `src/Tensor/Tensor.MatMul.Gpu.cs`,
 `src/Tensor/TensorBackend.cs`, `src/Pretrain/PretrainCli.cs`.
 
-**Run it:** no CLI of its own - pass `--gpu` (and, on a machine without a
-working CUDA/OpenCL driver, `--gpu-allow-cpu-fallback`) to the
-[pretraining CLI](#stage-6--training-loop). Real command, real output -
-strict mode refusing on this machine, since no genuine GPU accelerator is
-reachable here:
+**Run it:** no CLI of its own - pass `--gpu` to the
+[pretraining CLI](#stage-6--training-loop) (`--gpu-allow-cpu-fallback` also
+exists, for a machine without a working GPU driver - see the note above).
+Real command, real output, genuinely running on the AMD GPU via OpenCL this
+time (`GpuContext`'s own accelerator-selection logic, unchanged since
+TASK-031, already preferred a real GPU whenever `Context.Devices` reported
+one - it just had nothing to prefer until the driver was fixed):
 
 ```text
-$ dotnet run -- vocab.bpe out.checkpoint big_corpus.txt --gpu
+$ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
+    --embedding-dim 64 --layers 2 --heads 2 --context-length 64 \
+    --steps 30 --batch-size 4 --learning-rate 0.0003 --gpu
 
-No GPU accelerator (CUDA or OpenCL) was found - only: CPU. Pass an explicit CPU-fallback
-option to run ILGPU's CPU accelerator instead (useful for testing the mechanism without
-real GPU hardware), or use --optimised for the CPU-only fast path.
+Bulk-encoding 1 corpus file(s)...
+Training a 2-layer, 64-dim GptModel for 30 steps (batch size 4, context length 64, 3840 tokens)...
+step 0: loss 6.1716
+step 29: loss 5.1018
+Saved checkpoint to model.checkpoint.
 ```
 
 Wall-clock comparison, same corpus/model/step count throughout (a small
@@ -718,21 +719,54 @@ by design, same as every other worked example in this README):
 
 | Backend | Flag | Wall-clock (`real`, `time`) |
 |---|---|---|
-| Scalar (default) | *(none)* | 25.4s |
-| Optimised (stage 8) | `--optimised` | 24.3s |
-| GPU (ILGPU, CPU accelerator on this machine) | `--gpu --gpu-allow-cpu-fallback` | 35.5s |
+| Scalar (default) | *(none)* | 25.2s |
+| Optimised (stage 8) | `--optimised` | 23.5s |
+| GPU (real AMD RX 6750 XT, OpenCL) | `--gpu` | 23.2s |
 
-```text
-$ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
-    --embedding-dim 64 --layers 2 --heads 2 --context-length 64 \
-    --steps 30 --batch-size 4 --learning-rate 0.0003 --gpu --gpu-allow-cpu-fallback
+**The honest reading of that table:** real GPU execution here is roughly
+on par with both CPU paths - not the dramatic win a GPU's reputation might
+suggest, and not the earlier "GPU is slower" finding either. At this
+toy scale (a 64-dim, 2-layer model), per-matmul kernel-launch and
+host↔device transfer overhead is still large relative to the actual
+compute each matmul does, so a real GPU's parallelism advantage doesn't
+get much room to show up - the same fundamental limitation the earlier,
+CPU-accelerator-only measurement demonstrated more starkly. A genuinely
+bigger model (wide enough that each matmul's own compute dominates its
+launch/transfer overhead) would very likely show GPU pulling ahead of both
+CPU paths - consistent with why GPUs are the standard choice for real LLM
+training - but confirming that would need a much longer training run than
+this README's toy-sized, fast-to-reproduce examples are meant for (a
+256-dim/4-layer attempt during this write-up didn't finish in several
+minutes on the scalar path alone, only underlining the point). Reporting
+"roughly even at toy scale, real advantage would need a bigger model to
+confirm" plainly, rather than only showing a number and calling it a GPU
+win, is the same commitment to honest measurement this README's memory/disk
+footprint section makes.
 
-Bulk-encoding 1 corpus file(s)...
-Training a 2-layer, 64-dim GptModel for 30 steps (batch size 4, context length 64, 3840 tokens)...
-step 0: loss 6.1459
-step 29: loss 5.0912
-Saved checkpoint to model.checkpoint.
-```
+**Does a bigger *corpus* change that, even with the same tiny model?**
+Measured directly rather than assumed: same 2-layer, 64-dim model, same
+fixed 30 steps, against real 10 MB, 20 MB, and 50 MB corpora (the same
+sizes this README's memory/disk footprint section already uses, for a
+consistent point of reference):
+
+| Corpus | Optimised (`--optimised`) | GPU (`--gpu`) |
+|---|---|---|
+| 10 MB | 26.2s | 25.1s |
+| 20 MB | 30.6s | 29.1s |
+| 50 MB | 42.1s–44.7s (2 runs) | 43.3s |
+
+Both backends grow together as corpus size grows - because the step count
+is fixed regardless of corpus size, that growth is almost entirely
+bulk-encoding time (backend-independent; matches the tokeniser's own
+linear-with-input-size behaviour from the footprint section), not the
+matmul-heavy training loop itself. The two backends stay within noise of
+each other at every size, consistent with the single-corpus finding above:
+a bigger *corpus* doesn't change the picture, since it doesn't add more
+per-step matmul work - only a bigger *model* would. (One 50 MB GPU run
+initially read 65.2s, a clear outlier against a repeat run at 43.3s and
+against the pattern at every other size - re-run and reported here rather
+than left in, since a number that doesn't reproduce isn't a finding, it's
+noise.)
 
 **Source files** (tests): `tests/Tensor.Tests/{GpuContextTests,TensorTests,VariableTests}.cs`,
 `tests/Pretrain.Tests/PretrainCliTests.cs`.
@@ -745,11 +779,9 @@ cd tests/Pretrain.Tests && dotnet test
 verified by running the *same* test suite (including every gradient check)
 against the `Gpu` backend too, the same way stage 8's `--optimised` is
 verified - see the `[Theory]`-parametrised tests in `TensorTests.cs`/
-`VariableTests.cs`. On this machine those `Gpu` cases run against ILGPU's
-CPU accelerator (no working GPU driver here, as above), proving the
-kernel's *math* is correct; anyone with a working CUDA/OpenCL setup can
-re-run the exact same suite unchanged to additionally confirm that against
-real GPU hardware.
+`VariableTests.cs`. These now genuinely run against the real AMD GPU via
+OpenCL on this machine, not ILGPU's CPU accelerator - both prove the
+kernel's math is correct; only which hardware executed it changed.
 
 ## Putting it together: training and generating from code
 
@@ -974,22 +1006,22 @@ to match the dataset the way the 6-example demo used to need; `--steps`
 remains as a lower-level, unshuffled escape hatch, mutually exclusive with
 `--epochs`.
 
-TASK-031/032/033 added stage 11's optional GPU backend (ILGPU) - working
-and tested, but with an honest, machine-specific caveat worth repeating
-here rather than only in stage 11: **this project's own development
-machine cannot currently demonstrate real GPU execution**, despite having
-a discrete AMD GPU. The OpenCL ICD registration is present but the actual
-native driver library is missing in this environment, so `--gpu` only ever
-finds ILGPU's own CPU accelerator here (confirmed directly, not assumed -
-see stage 11). Everything about the mechanism is real and correctly
-implemented and tested - the kernel, the accelerator-selection/preflight
-logic, the CLI wiring, the honest "GPU was slower than CPU at this toy
-scale" wall-clock finding - only the specific claim "this ran on a real
-GPU" isn't true *on this machine as currently configured*. Anyone running
-this on a machine with a working CUDA or OpenCL driver gets real GPU
-execution with no code changes.
+TASK-031/032/033 added stage 11's optional GPU backend (ILGPU) - working,
+tested, and (as of a follow-up fix) genuinely demonstrated on real GPU
+hardware. The first version of this section carried a caveat that this
+machine couldn't reach its own discrete AMD GPU at all - true at the time,
+root-caused to one missing OS package (`ocl-icd-devel`, which provides the
+unversioned `libOpenCL.so` symlink .NET's native-library probing needs;
+the runtime library alone, already installed, wasn't enough). Installing
+it fixed detection immediately, no code change - exactly what
+`GpuContext`'s "prefer a real accelerator whenever one is reported" design
+was supposed to make possible. Re-measured on the real AMD RX 6750 XT via
+OpenCL: at this README's toy demo scale, GPU execution lands roughly even
+with both CPU paths (see stage 11's table) - not a dramatic win, since
+kernel-launch/transfer overhead still dominates actual compute at this
+size, but a genuinely different and more complete finding than "GPU was
+slower," which no longer holds now that a real GPU is reachable.
 
-No open gaps remain from this line of follow-up work beyond the driver
-caveat above - see TASK.md for the full task-by-task history if scaling to
-a genuinely large corpus/dataset (hundreds of MB, thousands of examples)
-raises something new.
+No open gaps remain from this line of follow-up work - see TASK.md for the
+full task-by-task history if scaling to a genuinely large corpus/dataset
+(hundreds of MB, thousands of examples) raises something new.

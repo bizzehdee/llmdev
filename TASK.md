@@ -1223,23 +1223,34 @@ CLI/demo integration.
   accepting that CPU accelerator anyway.
 
   **The honest finding this task asked for, found by actually measuring
-  rather than assuming:** this project's dev machine can't currently
+  rather than assuming - and revised once already, which is the whole
+  point of measuring:** this project's dev machine initially couldn't
   exercise real GPU hardware through this backend at all - a discrete AMD
-  GPU and OpenCL ICD registration are present, but the native driver
-  library the ICD points at is missing in this environment (confirmed by
-  direct probing during TASK-031, not assumed), so `--gpu` only ever finds
-  ILGPU's own CPU accelerator here. Given that, the wall-clock comparison
-  necessarily compares CPU paths against ILGPU's CPU accelerator, not real
-  GPU silicon - and even so, it's a genuinely informative result: on a
-  toy-sized demo (2-layer, 64-dim, 30 steps, batch size 4), GPU execution
-  was *slower* than either CPU path (35.5s vs. 25.4s scalar, 24.3s
-  optimised) - per-matmul host↔device allocation/transfer overhead
-  dominates at this scale before any execution-parallelism advantage could
-  pay for itself. Documented plainly in README.md's new stage 11 section
-  and its Project status section, exactly the way the memory/disk
-  footprint section's own "honest surprise" (TASK-029) was, not glossed
-  over. PLAN.md's "Known limitations / deferred" GPU bullet updated to
-  reflect this as delivered-with-a-caveat, not merely planned.
+  GPU and OpenCL ICD registration were present, but the native driver
+  library the ICD pointed at was missing, so `--gpu` only found ILGPU's
+  own CPU accelerator. On that basis, the first wall-clock comparison
+  showed GPU execution *slower* than either CPU path (35.5s vs. 25.4s
+  scalar, 24.3s optimised) on a toy-sized demo. That finding is now
+  superseded: root-caused the missing-driver gap down to one specific OS
+  package (`ocl-icd-devel` - provides the unversioned `libOpenCL.so`
+  symlink .NET's native-library probing needs; the runtime library alone
+  wasn't enough, confirmed via `clinfo` seeing the GPU while ILGPU's own
+  OpenCL device enumeration returned nothing). Installing it fixed
+  detection immediately, no code change required - `GpuContext`'s
+  "prefer a real accelerator whenever `Context.Devices` reports one" logic
+  (TASK-031) worked exactly as designed the moment a real one existed.
+  Re-measured on the real AMD RX 6750 XT via OpenCL, same model/steps:
+  scalar 25.2s, optimised 23.5s, GPU 23.2s - roughly even, not a dramatic
+  GPU win, because kernel-launch/host↔device transfer overhead still
+  dominates actual compute at this toy scale; a genuinely bigger model
+  would very likely show GPU pulling ahead, but confirming that needs a
+  training run longer than this README's fast-to-reproduce examples are
+  meant for (a 256-dim/4-layer attempt during this write-up didn't finish
+  in several minutes on the scalar path alone). Documented plainly in
+  README.md's stage 11 and Project status sections, and in PLAN.md's
+  "Known limitations / deferred" - both explicitly note the earlier
+  finding was real at the time but is now superseded, not silently
+  replaced.
 
   Tests: `PretrainCliTests` proves `--gpu`+`--optimised` together is a
   clear error, `--gpu-allow-cpu-fallback` without `--gpu` is a clear error,
@@ -1247,10 +1258,14 @@ CLI/demo integration.
   completes a real training run end to end on any machine, and - without
   hardcoding an assumption either way about hardware - a test that asks
   `GpuContext` directly what it would decide and proves the CLI's strict
-  `--gpu` (no fallback) behaves consistently with that; on this machine,
-  that test exercises the real "no GPU found" error path end to end
-  through the CLI, not just at the unit level. Solution-wide: 435 tests
-  passing; `Pretrain.PretrainCli` at 100% branch coverage.
+  `--gpu` (no fallback) behaves consistently with that. That last test is
+  exactly why no test changes were needed once the driver was fixed: it
+  was written to prove consistency with whatever `GpuContext` actually
+  decides, not to assert a specific hardware outcome - it exercised the
+  "no GPU found" error path end to end before the fix, and the
+  "genuine GPU selected" success path after, without being touched.
+  Solution-wide: 435 tests passing; `Pretrain.PretrainCli` at 100% branch
+  coverage.
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

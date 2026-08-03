@@ -365,17 +365,24 @@ that category, see stage 11 above and TASK-031 onward:
   could only be described, not demonstrated. → stage 11 above, delivered by
   TASK-031/032/033 (ILGPU), added at the user's explicit request
   specifically to close this gap - not previously planned. Mixed
-  precision/multi-GPU training remain out of scope. **Honest caveat, not a
-  loose end:** this project's own dev machine cannot currently exercise
-  real GPU hardware through this backend - a discrete AMD GPU and OpenCL
-  ICD registration are present, but the native driver library the ICD
-  points at is missing in this environment, so `--gpu` only ever finds
-  ILGPU's own CPU accelerator here (confirmed directly, not assumed). The
-  mechanism itself - kernel, accelerator detection/preflight, CLI wiring,
-  test coverage - is genuinely complete and correct; only the specific
-  claim "verified against real GPU silicon" doesn't hold *on this machine
-  as currently configured*. A machine with a working CUDA/OpenCL driver
-  gets real GPU execution with no code changes.
+  precision/multi-GPU training remain out of scope. **Now genuinely
+  verified against real GPU hardware, after a real fix, not just planned:**
+  this project's dev machine initially couldn't reach its own discrete AMD
+  GPU at all despite an OpenCL ICD registration for it - root-caused (not
+  assumed) to one missing OS package, `ocl-icd-devel`, which provides the
+  unversioned `libOpenCL.so` symlink .NET's native-library probing for
+  ILGPU's OpenCL layer needs (the runtime library alone, `libOpenCL.so.1`,
+  wasn't enough - `clinfo` could already see the GPU through it directly,
+  ILGPU's P/Invoke layer couldn't). Installing that package fixed detection
+  immediately, no code change - confirming `GpuContext`'s existing
+  "prefer a real accelerator whenever `Context.Devices` reports one" design
+  worked exactly as intended once a real one existed to prefer. Re-measured
+  on the real AMD RX 6750 XT via OpenCL (README stage 11's table): at this
+  project's toy demo scale, GPU execution lands roughly even with both CPU
+  paths, not dramatically faster - kernel-launch/transfer overhead still
+  dominates actual compute at this size - a different, more complete
+  finding than the earlier (now-superseded) "GPU was slower" result, which
+  only ever reflected ILGPU's CPU accelerator, not real GPU silicon.
 - Distributed (multi-machine) training — out of scope for now, not
   planned or tasked. Unlike GPU execution before this update, there's no
   standing user request driving this one, so it stays undone rather than
