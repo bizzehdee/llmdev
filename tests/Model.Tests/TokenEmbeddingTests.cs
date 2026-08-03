@@ -17,6 +17,14 @@ public class TokenEmbeddingTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var embedding = new TokenEmbedding(vocabSize: 10, embeddingDim: 4);
+
+        Assert.Contains(embedding.Weight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Constructor_InitialisesWithSmallNonZeroValues()
     {
         var embedding = new TokenEmbedding(vocabSize: 50, embeddingDim: 16, new Random(1));

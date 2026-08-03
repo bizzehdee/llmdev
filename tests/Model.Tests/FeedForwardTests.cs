@@ -19,6 +19,14 @@ public class FeedForwardTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var ff = new FeedForward(embeddingDim: 4, hiddenDim: 8);
+
+        Assert.Contains(ff.InputWeight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Constructor_BiasesInitialiseToZero()
     {
         var ff = new FeedForward(embeddingDim: 4, hiddenDim: 16, new Random(1));

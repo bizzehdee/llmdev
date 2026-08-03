@@ -8,6 +8,7 @@
     <Project Path="src/Training/Training.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Common.Tests/Common.Tests.csproj" />
     <Project Path="tests/Generation.Tests/Generation.Tests.csproj" />
     <Project Path="tests/Model.Tests/Model.Tests.csproj" />
     <Project Path="tests/Tensor.Tests/Tensor.Tests.csproj" />

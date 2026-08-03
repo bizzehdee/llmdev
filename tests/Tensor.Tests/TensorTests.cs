@@ -61,6 +61,14 @@ public class TensorTests
     }
 
     [Fact]
+    public void Indexer_NegativeIndexThrows()
+    {
+        using var t = Tensor.Zeros([2, 2]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => t[-1, 0]);
+    }
+
+    [Fact]
     public void Indexer_WrongRankThrows()
     {
         using var t = Tensor.Zeros([2, 2]);
@@ -119,6 +127,21 @@ public class TensorTests
         using var scalar = Tensor.FromValues([10], [1]);
 
         using var result = matrix.Add(scalar);
+
+        Assert.Equal(new float[] { 11, 12, 13, 14 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Add_BroadcastsMatrixAgainstScalar_LowerRankOperandFirst()
+    {
+        // Same broadcast as above, but with the lower-rank operand as the
+        // receiver (`this`) rather than the argument - exercises the "pad
+        // this tensor's missing leading dimensions" side of broadcasting,
+        // not just "pad the argument's".
+        using var scalar = Tensor.FromValues([10], [1]);
+        using var matrix = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        using var result = scalar.Add(matrix);
 
         Assert.Equal(new float[] { 11, 12, 13, 14 }, result.ToArray());
     }
@@ -207,6 +230,24 @@ public class TensorTests
     }
 
     [Fact]
+    public void MatMul_ThisRankBelowTwoThrows()
+    {
+        using var a = Tensor.Zeros([3]);
+        using var b = Tensor.Zeros([3, 2]);
+
+        Assert.Throws<InvalidOperationException>(() => a.MatMul(b));
+    }
+
+    [Fact]
+    public void MatMul_OtherRankBelowTwoThrows()
+    {
+        using var a = Tensor.Zeros([2, 3]);
+        using var b = Tensor.Zeros([3]);
+
+        Assert.Throws<InvalidOperationException>(() => a.MatMul(b));
+    }
+
+    [Fact]
     public void Transpose_TwoDimensional_SwapsRowsAndColumns()
     {
         using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
@@ -226,6 +267,38 @@ public class TensorTests
 
         Assert.Equal(t.Shape, roundTripped.Shape);
         Assert.Equal(t.ToArray(), roundTripped.ToArray());
+    }
+
+    [Fact]
+    public void Transpose_NegativeDim0Throws()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Transpose(-1, 0));
+    }
+
+    [Fact]
+    public void Transpose_Dim0TooLargeThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Transpose(2, 0));
+    }
+
+    [Fact]
+    public void Transpose_NegativeDim1Throws()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Transpose(0, -1));
+    }
+
+    [Fact]
+    public void Transpose_Dim1TooLargeThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Transpose(0, 2));
     }
 
     [Fact]
@@ -262,6 +335,22 @@ public class TensorTests
         using var result = t.Mean(axis: 1);
 
         Assert.Equal(new float[] { 2, 5 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Sum_NegativeAxisThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Sum(axis: -1));
+    }
+
+    [Fact]
+    public void Sum_AxisTooLargeThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Sum(axis: 2));
     }
 
     [Fact]
@@ -401,6 +490,38 @@ public class TensorTests
     }
 
     [Fact]
+    public void GatherRows_NegativeIndexThrows()
+    {
+        using var t = Tensor.Zeros([3, 2]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => t.GatherRows([-1]));
+    }
+
+    [Fact]
+    public void GatherRows_WrongRankThrows()
+    {
+        using var t = Tensor.Zeros([3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.GatherRows([0]));
+    }
+
+    [Fact]
+    public void ScatterAddRows_WrongRankThrows()
+    {
+        using var t = Tensor.Zeros([3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.ScatterAddRows([0], targetRowCount: 1));
+    }
+
+    [Fact]
+    public void ScatterAddRows_MismatchedIndexCountThrows()
+    {
+        using var t = Tensor.Zeros([3, 2]);
+
+        Assert.Throws<InvalidOperationException>(() => t.ScatterAddRows([0, 1], targetRowCount: 5));
+    }
+
+    [Fact]
     public void ScatterAddRows_AccumulatesRepeatedIndices()
     {
         using var grad = Tensor.FromValues([1, 1, 2, 2, 3, 3], [3, 2]);
@@ -454,6 +575,38 @@ public class TensorTests
     }
 
     [Fact]
+    public void GatherColumns_WrongRankThrows()
+    {
+        using var t = Tensor.Zeros([3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.GatherColumns([0]));
+    }
+
+    [Fact]
+    public void GatherColumns_NegativeColumnThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => t.GatherColumns([-1, 0]));
+    }
+
+    [Fact]
+    public void ScatterAddColumns_WrongRankThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.ScatterAddColumns([0, 1], columnCount: 3));
+    }
+
+    [Fact]
+    public void ScatterAddColumns_MismatchedIndexCountThrows()
+    {
+        using var t = Tensor.Zeros([2]);
+
+        Assert.Throws<InvalidOperationException>(() => t.ScatterAddColumns([0, 1, 2], columnCount: 3));
+    }
+
+    [Fact]
     public void ScatterAddColumns_PlacesEachValueAtItsColumnIndex()
     {
         using var t = Tensor.FromValues([10, 20], [2]);
@@ -503,6 +656,24 @@ public class TensorTests
         using var delta = Tensor.Zeros([4]);
 
         Assert.Throws<InvalidOperationException>(() => t.SubtractInPlace(delta));
+    }
+
+    [Fact]
+    public void LoadInPlace_OverwritesBufferDirectly()
+    {
+        using var t = Tensor.Zeros([3]);
+
+        t.LoadInPlace([1, 2, 3]);
+
+        Assert.Equal(new float[] { 1, 2, 3 }, t.ToArray());
+    }
+
+    [Fact]
+    public void LoadInPlace_WrongLengthThrows()
+    {
+        using var t = Tensor.Zeros([3]);
+
+        Assert.Throws<InvalidOperationException>(() => t.LoadInPlace([1, 2]));
     }
 
     private static IEqualityComparer<float> EqualityComparer() => new ApproximateFloatComparer(1e-5f);

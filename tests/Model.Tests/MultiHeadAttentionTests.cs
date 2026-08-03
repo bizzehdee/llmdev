@@ -16,6 +16,14 @@ public class MultiHeadAttentionTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var mha = new MultiHeadAttention(embeddingDim: 4, numHeads: 2);
+
+        Assert.Contains(mha.QueryWeight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Constructor_EmbeddingDimNotDivisibleByNumHeadsThrows()
     {
         Assert.Throws<ArgumentException>(() => new MultiHeadAttention(embeddingDim: 10, numHeads: 3, random: new Random(1)));

@@ -16,6 +16,14 @@ public class PositionalEmbeddingTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var embedding = new PositionalEmbedding(maxSequenceLength: 16, embeddingDim: 4);
+
+        Assert.Contains(embedding.Weight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Constructor_InitialisesWithSmallNonZeroValues()
     {
         var embedding = new PositionalEmbedding(maxSequenceLength: 16, embeddingDim: 8, new Random(1));

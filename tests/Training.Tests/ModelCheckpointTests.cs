@@ -109,4 +109,31 @@ public class ModelCheckpointTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_ChangedParameterShapeInFileThrows()
+    {
+        var model = new GptModel(vocabSize: 6, embeddingDim: 4, numLayers: 1, numHeads: 2, maxSequenceLength: 5, random: new Random(1));
+        string path = Path.Combine(ScratchDirectory, $"checkpoint-{Guid.NewGuid():N}.bin");
+
+        try
+        {
+            ModelCheckpoint.Save(model, path);
+
+            // Corrupt the first parameter's first shape dimension (TokenEmbedding.Weight,
+            // [vocabSize, embeddingDim] = [6, 4]): 6 header ints, then the parameter count
+            // int, then that parameter's rank int, then its first dimension.
+            var bytes = File.ReadAllBytes(path);
+            const int headerInts = 6;
+            int firstDimOffset = (headerInts + 1 /* count */ + 1 /* rank */) * sizeof(int);
+            BitConverter.GetBytes(999).CopyTo(bytes, firstDimOffset);
+            File.WriteAllBytes(path, bytes);
+
+            Assert.Throws<InvalidOperationException>(() => ModelCheckpoint.Load(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

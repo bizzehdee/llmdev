@@ -19,6 +19,14 @@ public class GptModelTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var model = new GptModel(vocabSize: 10, embeddingDim: 4, numLayers: 1, numHeads: 2, maxSequenceLength: 5);
+
+        Assert.Contains(model.TokenEmbedding.Weight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Parameters_CountsEveryLearnedVariableExactlyOnce()
     {
         var model = new GptModel(vocabSize: 20, embeddingDim: 8, numLayers: 2, numHeads: 2, maxSequenceLength: 16, random: new Random(1));

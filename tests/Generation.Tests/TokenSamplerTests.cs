@@ -114,4 +114,61 @@ public class TokenSamplerTests
         float fractionIndex0 = (float)counts[0] / trials;
         Assert.True(fractionIndex0 > 0.35f, $"Expected a high temperature to make both outcomes roughly comparable, got fraction {fractionIndex0} for index 0.");
     }
+
+    [Fact]
+    public void Sample_TopKZeroOrLess_ActsAsUnrestricted()
+    {
+        float[] logits = [1f, 2f, 3f, 4f];
+        var unrestricted = new SamplingOptions { Temperature = 1f };
+        var topKZero = new SamplingOptions { Temperature = 1f, TopK = 0 };
+
+        var counts = new int[4];
+        const int trials = 5000;
+        for (int i = 0; i < trials; i++)
+        {
+            counts[TokenSampler.Sample(logits, topKZero, new Random(i))]++;
+        }
+
+        // With TopK <= 0 treated as "no restriction," every index should still
+        // be reachable, not just the single highest-logit one.
+        Assert.True(counts.Count(c => c > 0) > 1, "Expected TopK=0 to not restrict sampling to a single token.");
+    }
+
+    [Fact]
+    public void Sample_TopKAtOrAboveLength_ActsAsUnrestricted()
+    {
+        float[] logits = [1f, 2f, 3f, 4f];
+        var options = new SamplingOptions { Temperature = 1f, TopK = 10 }; // >= logits.Length
+
+        var counts = new int[4];
+        const int trials = 5000;
+        for (int i = 0; i < trials; i++)
+        {
+            counts[TokenSampler.Sample(logits, options, new Random(i))]++;
+        }
+
+        Assert.True(counts.Count(c => c > 0) > 1, "Expected TopK >= logits.Length to not restrict sampling to a single token.");
+    }
+
+    [Fact]
+    public void Sample_TopP_CanRequireMultipleCandidatesBeforeReachingThreshold()
+    {
+        // Four near-equal-probability logits: reaching a high cumulative
+        // threshold (0.95) requires accumulating several candidates, not
+        // just the single top one - exercises the "haven't reached the
+        // threshold yet, keep going" side of top-p's loop, not just the
+        // "reached it, stop" side that a very small p always hits immediately.
+        float[] logits = [1f, 1.01f, 0.99f, 1.02f];
+        var options = new SamplingOptions { Temperature = 1f, TopP = 0.95f };
+        var random = new Random(1);
+
+        var counts = new int[4];
+        const int trials = 2000;
+        for (int i = 0; i < trials; i++)
+        {
+            counts[TokenSampler.Sample(logits, options, random)]++;
+        }
+
+        Assert.True(counts.Count(c => c > 0) >= 3, "Expected a high top-p threshold over near-equal logits to keep more than one or two candidates eligible.");
+    }
 }

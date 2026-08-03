@@ -14,6 +14,14 @@ public class TransformerBlockTests
     }
 
     [Fact]
+    public void Constructor_WithoutExplicitRandom_StillInitialises()
+    {
+        var block = new TransformerBlock(embeddingDim: 4, numHeads: 2);
+
+        Assert.Contains(block.Attention.QueryWeight.Value.ToArray(), v => v != 0f);
+    }
+
+    [Fact]
     public void Constructor_FeedForwardHiddenDimIsOverridable()
     {
         var block = new TransformerBlock(embeddingDim: 8, numHeads: 2, feedForwardHiddenDim: 10, random: new Random(1));
