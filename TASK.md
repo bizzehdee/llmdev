@@ -312,6 +312,7 @@ for the full rationale and open design questions before starting this task.
   correct even with `Backend == Optimised`. Solution-wide branch coverage
   held at 97.2% after the change (every production assembly still ≥90%).
   Depends on: TASK-003
+  Required by: TASK-031
 
 ## Instruction tuning
 Added after the original 7-stage plan, at the user's request (not part of
@@ -1037,8 +1038,97 @@ thousands of examples.
   Solution-wide: 413 tests passing; `Sft` and `Training` both at 100%
   branch coverage.
 
+## Optional GPU-accelerated backend (ILGPU)
+Added at the user's explicit request specifically to demonstrate GPU-based
+training as part of this project's lesson plan (PLAN.md stage 11) - not a
+performance initiative for its own sake, and not previously planned. A
+second explicit, opt-in library exception alongside TASK-015's Math.NET/
+`System.Numerics.Tensors` CPU fast path: ILGPU JIT-compiles ordinary C#
+into GPU kernels (CUDA/OpenCL/CPU accelerator), so this project still
+writes and owns the kernel logic itself - the library changes *where* it
+runs, not who wrote it. This machine has a discrete AMD GPU (Radeon
+RX 6700 XT / Navi 22), so a genuine end-to-end demo here exercises ILGPU's
+OpenCL path, not CUDA - the tasks below and any README documentation must
+say so plainly rather than assume NVIDIA/CUDA by default. Tasks are
+ordered as dependencies: wiring before a real kernel, a real kernel before
+CLI/demo integration.
+
+- [ ] TASK-031: ILGPU dependency, context, and backend-selection plumbing -
+  no GPU math yet, just the ability to select a GPU backend and have it do
+  *something* correctly. Add the ILGPU NuGet package(s) to `Tensor` (or a
+  new project, if keeping ILGPU's `Context`/`Accelerator` lifetime
+  management out of `Tensor` itself turns out cleaner - a real design
+  decision to make during implementation, not assumed here). Extend the
+  existing `TensorBackend` enum (TASK-015: `Scalar`, `Optimised`) with a
+  third value for GPU execution, selected the same process-wide way
+  (`Tensor.Backend`, the existing `AsyncLocal<T>`-backed static) - no new
+  selection mechanism. Needs accelerator *detection*, not an assumption a
+  GPU exists: enumerate available ILGPU accelerators at startup, prefer a
+  real GPU (CUDA or OpenCL) if present, and produce a clear, actionable
+  error (not a crash) if the GPU backend is explicitly requested but no
+  compatible accelerator is found - `Context`/`Accelerator` are disposable
+  and process-lifetime, so decide and document exactly when they're
+  created/torn down (once at first use? explicitly via a CLI flag at
+  startup? both need to leave the process in a clean state either way).
+  Test: accelerator detection/selection logic runs correctly against
+  ILGPU's own CPU accelerator (always available, no real GPU hardware
+  needed for this to be a meaningful, CI-safe test) and produces the
+  documented clear error when a GPU is explicitly requested but
+  unavailable - do not skip or hardcode-pass this case just because CI
+  itself may lack a GPU.
+  Depends on: TASK-015
+  Required by: TASK-032
+
+- [ ] TASK-032: A real GPU-accelerated matmul kernel via ILGPU - the actual
+  math, building on TASK-031's plumbing. Matmul first, per TASK-015's own
+  priority reasoning (O(n³) dominates a transformer forward/backward pass;
+  elementwise ops are a stretch goal, not required for this to be worth
+  having). Write the kernel as plain, readable C# (ILGPU compiles it, not
+  a hand-rolled CUDA/OpenCL string) operating over ILGPU device-memory
+  buffers - a genuinely new storage location alongside `IFloatBuffer`'s
+  existing heap/disk-backed (`MappedArray<T>`) split, not a third case
+  bolted onto either existing implementation; host↔device transfer is new
+  surface area TASK-015's CPU-only fast path never had to consider.
+  Mirrors TASK-015's scoping: most likely only applies to heap-backed
+  tensors to start (a disk-backed tensor would need its own chunked
+  transfer strategy to avoid pulling an entire large tensor onto the GPU
+  at once - an open question to resolve during implementation, not
+  pre-decided here, and out of scope for this task if it turns out to need
+  its own design). Correctness bar, unchanged from TASK-015: the *same*
+  test suite (including finite-difference gradient checks) must pass
+  against this backend too, parametrised the same way TASK-015's tests
+  were - not a separate, smaller GPU-only suite. Tests must default to
+  ILGPU's CPU accelerator so they run without real GPU hardware; note
+  clearly in the test file which tests would additionally benefit from
+  being re-run manually against real GPU hardware (this machine's AMD
+  card via OpenCL), since CI can't be assumed to have one.
+  Depends on: TASK-031
+  Required by: TASK-033
+
+- [ ] TASK-033: Wire the GPU backend into a CLI and demonstrate it end to
+  end in README.md (a new stage 11 section, mirroring stage 9's
+  `--optimised` treatment). Add a `--gpu` flag (name TBD - resolve any
+  clash/overlap with `--optimised` before implementation: are `--gpu` and
+  `--optimised` mutually exclusive, or does `--gpu` imply/require the
+  optimised code path conceptually? decide, don't assume) to at least
+  `Pretrain`'s CLI (the heaviest compute, most likely to show a measurable
+  difference) - `Sft`/`Chat` are candidates too but not required if matmul
+  volume there is too small to demonstrate anything. The README demo must
+  be **honest about the actual win, not just "it ran"**: measure and
+  report real wall-clock time for a comparable training run on the scalar
+  path, TASK-015's optimised CPU path, and this GPU path, on this
+  machine's real AMD GPU (OpenCL) - including the case where GPU transfer
+  overhead makes a *tiny* toy-sized demo model slower on GPU than CPU,
+  which is a real and likely honest finding worth documenting exactly the
+  way the memory/disk footprint section's earlier "honest surprise"
+  (TASK-029) was, not glossed over in favour of a flattering number.
+  Update PLAN.md's "Known limitations / deferred" section once done to
+  reflect single-GPU execution as delivered, not just planned.
+  Depends on: TASK-025, TASK-032
+
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
-  except TASK-015, which is an explicit, narrowly-scoped, opt-in exception.
+  except TASK-015 and TASK-031/032 (ILGPU), which are explicit,
+  narrowly-scoped, opt-in exceptions.
 - Work through tasks one at a time in order; ambiguities get clarified
   before implementation starts on that task, not up front for all of them.

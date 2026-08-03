@@ -31,6 +31,22 @@ implementation by hand just to make later experimentation practical on
 real hardware. See stage 9 below for the open design questions this still
 needs to answer.
 
+**A second explicit, opt-in exception (stage 11 / TASK-031 onward):**
+[ILGPU](https://github.com/m4rs-mt/ILGPU) - a pure C# library that JIT-compiles
+ordinary C# methods into GPU kernels (CUDA on NVIDIA hardware, OpenCL on
+AMD/Intel/NVIDIA, or a CPU accelerator with no GPU at all), added at the
+user's request specifically to demonstrate GPU-based training as part of
+this project's lesson plan. No C/C++ interop code to write - ILGPU is the
+interop layer. The rationale mirrors TASK-015's: this project still writes
+and owns the actual kernel logic (matmul above all) itself, just targeting
+a GPU execution model instead of a CPU loop - a different *backend* for
+math already implemented and understood from first principles (TASK-003),
+not a black-box library that does the math *for* this project the way
+TorchSharp or ML.NET would. It doesn't replace the hand-written scalar
+path (still the default, always-correct reference) or TASK-015's CPU fast
+path - a third, independently-selectable backend. See stage 11 below for
+the open design questions.
+
 ## Goal
 Learn how LLMs work by building one end-to-end: tokeniser → tensors/autodiff
 → embeddings → attention/transformer → training loop → text generation.
@@ -229,6 +245,57 @@ rather than assuming it fits in RAM:
       Dolly) as a starting point or reference for format - mind licensing
       terms before use, and note that reformatting to whatever template
       TASK-016 settles on will still be needed.
+11. **Optional GPU-accelerated backend (ILGPU)** — a third, opt-in
+    `Tensor` backend alongside the existing hand-written scalar path
+    (default) and TASK-015's CPU-optimised path, this time targeting a
+    GPU instead of the CPU, so GPU-based training can genuinely be
+    demonstrated as part of this project's lesson plan rather than only
+    described. Added after the original plan, at the user's explicit
+    request specifically for this purpose - not a performance initiative
+    for its own sake.
+
+    **Why ILGPU, and why this is scoped narrowly, mirroring stage 9:**
+    - Pure C#: ILGPU JIT-compiles ordinary C# methods into GPU kernels at
+      runtime. No C/C++ interop code to write by hand, and no native
+      library binding to maintain - the one thing that made a GPU backend
+      worth considering for a project whose whole premise is "no ML
+      libraries, understand every mechanism." This project still writes
+      the actual kernel logic (matmul above all) itself; ILGPU changes
+      *where* that logic executes, not who wrote it - unlike TorchSharp or
+      ML.NET, which would hide the actual computation behind a library
+      call the way the "no libraries" rule exists to prevent.
+    - Backend coverage: CUDA (NVIDIA), OpenCL (AMD, Intel, and NVIDIA as a
+      fallback), and a CPU accelerator (no GPU needed at all, useful for
+      correctness testing and CI where real GPU hardware isn't available).
+      This project's own dev machine has a discrete AMD GPU (Radeon
+      RX 6700 XT / Navi 22), so a genuine end-to-end GPU demo here would
+      exercise ILGPU's OpenCL path, not CUDA - worth being explicit about
+      in the README rather than writing docs that assume NVIDIA/CUDA by
+      default.
+    - Same threading mechanism as TASK-015's `Tensor.Backend` switch - a
+      process-wide selection (e.g. extending the existing backend enum or
+      a sibling switch), not a parameter threaded through every op or
+      call site.
+    - Same correctness bar as TASK-015: the GPU path must produce results
+      equivalent (within float tolerance) to the existing scalar path,
+      proven by running the *same* test suite (including gradient checks)
+      against it - not a separate, smaller GPU-only test suite. Tests
+      should default to ILGPU's CPU accelerator so the suite runs without
+      requiring real GPU hardware to be present; a real-hardware run is a
+      manual/demo step, not something CI can assume.
+    - Open questions a real implementation needs to resolve, not
+      pre-decided here: which ops actually move to the GPU (matmul first,
+      per TASK-015's own priority reasoning: O(n³) dominates); how
+      `IFloatBuffer`'s heap-vs-disk-backed storage split interacts with a
+      GPU backend, which needs its own device-memory buffers regardless
+      (a third storage location, not just a third compute path); and
+      whether/how host↔device transfer overhead makes the GPU path a net
+      win only above some model/batch size, which the demo should measure
+      and report honestly rather than assume.
+    - What this explicitly does **not** open up: no other GPU/ML library,
+      no multi-GPU or distributed training, no mixed precision - this is
+      "run the same math this project already understands, elsewhere,"
+      not a general performance-library door.
 
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage
@@ -244,8 +311,10 @@ request; not yet started.
 Flagged individually in TASK.md as each was made; collected here for a
 single view of what a real training run might need to revisit. All but
 the last now have a follow-up task in TASK.md (added at the user's
-request); GPU/distributed training remains genuinely out of scope, not
-just "not done yet":
+request); distributed (multi-machine) training remains out of scope for
+now (not planned/tasked, though revisitable if asked, unlike the "no ML
+libraries" rule itself) - single-machine GPU execution is no longer in
+that category, see stage 11 above and TASK-031 onward:
 
 - **Bulk-encoding a large corpus is slow.** `BpeTokeniser.Encode` uses the
   simple merge-scan approach tuned for short/moderate text (TASK-010),
@@ -283,16 +352,28 @@ just "not done yet":
 - **No CPU parallelism anywhere** - confirmed by inspection (no
   `Parallel`/`Task.Run`/threading in `src/`), not merely undocumented: every
   `Tensor` op, matmul above all, runs as a single-threaded scalar loop.
-  This is a distinct gap from the GPU/distributed-training exclusion below
-  - it doesn't need a GPU or another machine, just more of the cores
-  already on this one, via .NET's own Task Parallel Library
-  (`Parallel.For`/`Parallel.ForEach` - BCL, not a "no libraries" exception
-  the way TASK-015 is, any more than `MemoryMappedFile` or `async`/`await`
-  are). → TASK-021.
-- GPU execution, mixed precision, distributed (multi-machine) training —
-  genuinely out of scope, not just undone. This is a learning project, not
-  a performance target; CPU-only, single-machine, but "single-machine"
-  doesn't mean "single-threaded" (see TASK-021 above, which is in scope).
+  This is a distinct gap from GPU execution (a different backend, stage 11
+  below) or distributed training (still excluded, see below) - it doesn't
+  need a GPU or another machine, just more of the cores already on this
+  one, via .NET's own Task Parallel Library (`Parallel.For`/
+  `Parallel.ForEach` - BCL, not a "no libraries" exception the way
+  TASK-015 is, any more than `MemoryMappedFile` or `async`/`await` are).
+  → TASK-021.
+- **No GPU-accelerated backend** - every `Tensor` op runs on the CPU today
+  (the hand-written scalar path, or TASK-015's Math.NET/
+  `System.Numerics.Tensors` fast path), never a GPU, so GPU-based training
+  can only be described, not demonstrated. → stage 11 above, TASK-031
+  onward (ILGPU), added at the user's explicit request specifically to
+  close this gap - not previously planned, and mixed precision/multi-GPU
+  training remain out of scope even once single-GPU execution lands.
+- Distributed (multi-machine) training — out of scope for now, not
+  planned or tasked. Unlike GPU execution before this update, there's no
+  standing user request driving this one, so it stays undone rather than
+  becoming a stage/task - but it's a "not currently planned" position, not
+  a permanent architectural ban the way "no ML libraries generally" is;
+  revisit if the user asks, the same way GPU execution just did. One
+  machine throughout today, whether that machine's `Tensor` ops run on its
+  CPU (default, or TASK-021's parallel CPU path) or its GPU (stage 11).
 
 Flagged while answering a question about scaling to a real (~230 MB, 250
 book) corpus and dataset - both are genuine gaps at that scale, not
