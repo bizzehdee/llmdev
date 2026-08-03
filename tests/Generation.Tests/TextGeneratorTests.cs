@@ -124,4 +124,60 @@ public class TextGeneratorTests
         string decodedPrompt = tokeniser.Decode(tokeniser.Encode(prompt));
         Assert.StartsWith(decodedPrompt, generated);
     }
+
+    [Fact]
+    public void GenerateTokenIdsUntilStopSequence_MatchesPlainGeneration_WhenStopSequenceNeverAppears()
+    {
+        var tokeniser = new BpeTokeniser(); // untrained: plain byte-level identity vocab, fully deterministic decode
+        var model = new GptModel(vocabSize: tokeniser.VocabSize, embeddingDim: 8, numLayers: 1, numHeads: 2, maxSequenceLength: 30, random: new Random(1));
+        int[] prompt = tokeniser.Encode("hello").ToArray();
+
+        var plain = TextGenerator.GenerateTokenIds(model, prompt, maxNewTokens: 15, SamplingOptions.Greedy());
+        var withStop = TextGenerator.GenerateTokenIdsUntilStopSequence(model, tokeniser, prompt, maxNewTokens: 15, "### Instruction:", SamplingOptions.Greedy());
+
+        Assert.Equal(plain, withStop);
+    }
+
+    [Fact]
+    public void GenerateTokenIdsUntilStopSequence_StopsEarlyAndTrimsOnceStopSequenceAppears()
+    {
+        var tokeniser = new BpeTokeniser();
+        var model = new GptModel(vocabSize: tokeniser.VocabSize, embeddingDim: 8, numLayers: 1, numHeads: 2, maxSequenceLength: 30, random: new Random(1));
+        int[] prompt = tokeniser.Encode("hello").ToArray();
+
+        var unstopped = TextGenerator.GenerateTokenIds(model, prompt, maxNewTokens: 15, SamplingOptions.Greedy());
+        string generatedText = tokeniser.Decode(unstopped.Skip(prompt.Length));
+        Assert.True(generatedText.Length >= 4, "fixture assumption: enough generated text to carve a real stop sequence out of");
+        string stopSequence = generatedText[1..3]; // a genuine substring of what this exact model/prompt/seed produces
+
+        var stopped = TextGenerator.GenerateTokenIdsUntilStopSequence(model, tokeniser, prompt, maxNewTokens: 15, stopSequence, SamplingOptions.Greedy());
+
+        Assert.True(stopped.Count < unstopped.Count, "should halt before exhausting maxNewTokens once the stop sequence is found");
+        string stoppedNewText = tokeniser.Decode(stopped.Skip(prompt.Length));
+        Assert.DoesNotContain(stopSequence, stoppedNewText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenerateTokenIdsUntilStopSequence_ZeroMaxNewTokens_ReturnsPromptUnchanged()
+    {
+        var tokeniser = new BpeTokeniser();
+        var model = new GptModel(vocabSize: tokeniser.VocabSize, embeddingDim: 8, numLayers: 1, numHeads: 2, maxSequenceLength: 30, random: new Random(1));
+        int[] prompt = tokeniser.Encode("hello").ToArray();
+
+        var result = TextGenerator.GenerateTokenIdsUntilStopSequence(model, tokeniser, prompt, maxNewTokens: 0, "### Instruction:", SamplingOptions.Greedy());
+
+        Assert.Equal(prompt, result);
+    }
+
+    [Fact]
+    public void GenerateTokenIdsUntilStopSequence_PreservesPromptPrefix()
+    {
+        var tokeniser = new BpeTokeniser();
+        var model = new GptModel(vocabSize: tokeniser.VocabSize, embeddingDim: 8, numLayers: 1, numHeads: 2, maxSequenceLength: 30, random: new Random(1));
+        int[] prompt = tokeniser.Encode("hello").ToArray();
+
+        var result = TextGenerator.GenerateTokenIdsUntilStopSequence(model, tokeniser, prompt, maxNewTokens: 15, "unlikely-to-appear-marker", SamplingOptions.Greedy());
+
+        Assert.Equal(prompt, result.Take(prompt.Length));
+    }
 }

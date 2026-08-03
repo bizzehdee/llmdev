@@ -505,34 +505,31 @@ stage 6 (pretraining) is a *raw next-token-prediction model*, not an
 instruction-tuned assistant - it will continue text in the style of
 whatever it was trained on, not necessarily answer questions or follow
 instructions. Stage 9's fine-tuning makes it meaningfully more likely to
-behave like something worth talking to - but even then, this CLI reads one
-line of input as one turn, with no special handling for stage 9's
-multi-line prompt template. If your fine-tuning data was templated as
-`"### Instruction:\n{instruction}\n\n### Response:\n"`, typing a bare
-one-line question here isn't the same shape of input the model was tuned
-on, so don't expect it to follow the template's implicit contract as
-reliably as it would through code that reproduces the template exactly (see
-`SftDataset.Tokenize`). The CLI's own `--help`/banner text says this up
-front too, not just here.
+behave like something worth talking to - but by default, this CLI still
+reads one line of input as one turn with no special handling for stage 9's
+multi-line prompt template. That's what `--instruction-tuned` below is
+for.
 
-**Source files:** `src/Chat/ChatCli.cs`.
+**Source files:** `src/Chat/ChatCli.cs`, `src/Generation/TextGenerator.cs`
+(`GenerateTokenIdsUntilStopSequence`).
 
 **Run it:**
 
 ```bash
 cd src/Chat
-dotnet run -- <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>] [--max-new-tokens <n>] [--optimised]
+dotnet run -- <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>]
+  [--max-new-tokens <n>] [--context-length <n>] [--instruction-tuned] [--optimised]
 ```
 
-Example, chatting with the stage-9 fine-tuned checkpoint from above (real
-command, real output - greedy sampling, and a *tiny*, undertrained toy model
-by design, so don't expect fluent prose; this is here to show the mechanism
-working end to end, not to demonstrate quality). Note this is exactly the
-"doesn't automatically apply the template" caveat below in action: typing a
-bare one-line question doesn't reproduce the `"### Instruction:\n{instruction}\n\n### Response:\n"`
-shape the model was actually fine-tuned on, so instead of answering it
-continues into whatever text its training distribution makes most likely
-next:
+**Default mode** - reproduces the `"### Instruction:\n{instruction}\n\n### Response:\n"`
+shape the model was actually fine-tuned on. Example, chatting with the
+stage-9 fine-tuned checkpoint from above (real command, real output -
+greedy sampling, and a *tiny*, undertrained toy model by design, so don't
+expect fluent prose; this is here to show the mechanism working end to
+end, not to demonstrate quality). Typing a bare one-line question doesn't
+reproduce the template shape the model was fine-tuned on, so instead of
+answering it continues into whatever text its training distribution makes
+most likely next:
 
 ```text
 $ dotnet run -- model-sft.checkpoint vocab.bpe --temperature 0 --max-new-tokens 15
@@ -543,13 +540,89 @@ trained on, not necessarily answer questions or follow instructions.
 Type /exit (or send EOF, e.g. Ctrl+D) to leave.
 
 > What is the capital of France?
-, blue, and yellow are the three primary colours. Blue is a
+s freat tocabu     av
 > /exit
 Goodbye.
 ```
 
+**`--instruction-tuned`** (TASK-027) - opt-in, off by default so a purely
+pretrained checkpoint's existing raw-continuation behaviour isn't
+disturbed. Each turn's input is wrapped via `SftDataset.FormatPrompt`
+before encoding (the exact same template `SftDataset.Tokenize` uses, not a
+reimplementation of it), and generation halts at the next
+`SftDataset.InstructionMarker` (`"### Instruction:"`) instead of running on
+to `--max-new-tokens` regardless of content - new surface area in
+`TextGenerator.GenerateTokenIdsUntilStopSequence`, since decoded *text* is
+what's checked for the marker (a BPE tokeniser's merges mean no fixed
+token-id sequence reliably spells a given string). Because only the
+trimmed response text - never the marker itself - gets appended back into
+the running conversation, every prior turn ends up shaped like the
+template automatically, without a separate history-reformatting step:
+
+```text
+$ dotnet run -- model-sft.checkpoint vocab.bpe --instruction-tuned --temperature 0 --max-new-tokens 30
+
+Loaded model and vocabulary. Instruction-tuned mode: each turn is wrapped in the same
+prompt template the model was fine-tuned on (TASK-016), and generation stops at the next
+turn boundary instead of running on.
+Type /exit (or send EOF, e.g. Ctrl+D) to leave.
+
+> What is the capital of France?
+The capital of France is Paris. Paris is a large city in France.
+Red, blue, and yellow are the thre
+> /exit
+Goodbye.
+```
+
+Honest note on that transcript: this particular tiny, greedy, undertrained
+demo model answers the question correctly, then keeps going instead of
+actually halting at a `### Instruction:` boundary within 30 tokens - it
+never learned a strong enough tendency to reproduce that exact marker at
+this toy scale (pushed further, greedy decoding on a model this small and
+this overfit tends to degenerate into repetition loops rather than
+reproduce it either). The halting mechanism itself is proven correct by
+`Generation.Tests`' dedicated stop-sequence tests (a case engineered so
+the marker genuinely appears in generated text, confirming generation
+halts and trims at exactly that point) - this demo shows the *template
+application* working correctly, not a guarantee that any given toy model
+will spontaneously hit the boundary in any given number of tokens.
+
+**`--context-length <n>`** (TASK-028) - caps how many of the most recent
+tokens a conversation keeps before `TextGenerator`'s own sliding window
+(governed by the model's `MaxSequenceLength`) would otherwise kick in.
+Validated against the loaded model's `MaxSequenceLength` - a value that's
+too large is rejected outright, never silently clamped:
+
+```text
+$ dotnet run -- model-sft.checkpoint vocab.bpe --context-length 9999
+
+--context-length 9999 exceeds this model's MaxSequenceLength (128).
+```
+
+A small value truncates conversation history far sooner than the model's
+own 128-token limit would, which shows up as visibly degraded output once
+too little context remains (real command, real output, three turns in a
+row with `--context-length 16`):
+
+```text
+$ dotnet run -- model-sft.checkpoint vocab.bpe --context-length 16 --temperature 0 --max-new-tokens 10
+
+> What is the capital of France?
+s freat tocabu  
+> Name three primary colours.
+.. Paris is a tocabu
+> What does BPE stand for?
+s for Byte-Pair En
+> /exit
+Goodbye.
+```
+
+Omitting the flag behaves exactly as before - equivalent to passing the
+model's own `MaxSequenceLength` explicitly.
+
 ```bash
 cd tests/Chat.Tests && dotnet test
+cd tests/Generation.Tests && dotnet test
 ```
 
 ## Putting it together: training and generating from code
@@ -721,4 +794,34 @@ you trained on. A much bigger model (more layers/wider embeddings) would
 grow the checkpoint size and pretraining's baseline RAM; a much bigger
 corpus, with today's implementation, grows RAM too, not just disk - worth
 knowing before pointing this at a genuinely large corpus on a
-memory-constrained machine.
+memory-constrained machine. See TASK-029 in [TASK.md](TASK.md) for the
+planned fix (stream the input instead of `File.ReadAllText`), not yet
+implemented.
+
+## Project status
+
+Every stage above (1 through 10, plus the optional `--optimised` backend)
+is built, tested, and runnable today — see [TASK.md](TASK.md) for the
+task-by-task history and [PLAN.md](PLAN.md)'s "Known limitations /
+deferred" section for the trade-offs (not bugs) that were deliberately made
+along the way. The one thing genuinely out of scope, not just "not done
+yet": GPU/distributed training — this project targets a single
+CPU-only machine throughout.
+
+The caveat that used to be repeated here — that the chat CLI doesn't
+apply stage 9's prompt template or know when a response has "finished" —
+is closed as of TASK-027/TASK-028: `--instruction-tuned` wraps each turn
+in the exact template `SftDataset` uses and halts generation at the next
+turn boundary instead of running on, and `--context-length` gives control
+over how much conversation history is kept independent of the model's own
+fixed `MaxSequenceLength`. What's still true, and isn't a bug: this
+project's toy-sized demo models (tens of thousands of parameters, a few
+hundred training steps, a few KB of corpus) are there to show each
+mechanism working end to end, not to produce fluent or reliably on-topic
+conversation — see stage 10's own transcripts for exactly what that looks
+like in practice, warts included. Two genuinely open gaps, tracked as
+TASK-029 and TASK-030: peak RAM scales with input corpus size rather than
+staying flat (see the footprint table above), and the SFT CLI's
+`--steps`/`--batch-size` flags don't yet scale gracefully to a real
+dataset of hundreds or thousands of examples the way they do to the
+6-example demo.

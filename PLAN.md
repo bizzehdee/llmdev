@@ -116,15 +116,18 @@ rather than assuming it fits in RAM:
    upfront about in the CLI's own `--help`/README text, not just here.
 
    **Follow-up, flagged at the user's request while auditing the README
-   lesson plan (TASK-023) once instruction tuning (TASK-016) existed:**
-   even fine-tuned via TASK-016, the chat CLI still doesn't apply the SFT
-   prompt template per turn, has no notion of a response "finishing" (it
-   free-runs to `--max-new-tokens` regardless), and doesn't reformat
-   multi-turn history with role markers the way training data was
-   shaped - so a fine-tuned checkpoint still doesn't behave as well
-   through this CLI as it could. → TASK-027. Separately, the chat CLI has
-   no way to control how much context a conversation uses short of the
-   model's own fixed `MaxSequenceLength` → TASK-028. Both are CLI/runtime
+   lesson plan (TASK-023) once instruction tuning (TASK-016) existed, now
+   done (TASK-027, TASK-028):** even fine-tuned via TASK-016, the chat CLI
+   didn't apply the SFT prompt template per turn, had no notion of a
+   response "finishing" (it free-ran to `--max-new-tokens` regardless), and
+   didn't reformat multi-turn history with role markers the way training
+   data was shaped. TASK-027 added an opt-in `--instruction-tuned` flag
+   that wraps each turn in `SftDataset`'s own template, stops generation at
+   the next `### Instruction:` marker instead of running on, and - since
+   only the trimmed response text is ever appended back into history - every
+   prior turn ends up template-shaped automatically. TASK-028 separately
+   added `--context-length` so a conversation's window isn't stuck at
+   just the model's own fixed `MaxSequenceLength`. Both remain CLI/runtime
    improvements only - the user/learner is still expected to supply their
    own pretraining corpus and SFT dataset beyond `examples/sft-example.jsonl`,
    same as every other stage.
@@ -290,3 +293,21 @@ just "not done yet":
   genuinely out of scope, not just undone. This is a learning project, not
   a performance target; CPU-only, single-machine, but "single-machine"
   doesn't mean "single-threaded" (see TASK-021 above, which is in scope).
+
+Flagged while answering a question about scaling to a real (~230 MB, 250
+book) corpus and dataset - both are genuine gaps at that scale, not
+theoretical:
+
+- **`LinkedTokenStream.Build` loads the whole input file onto the heap**
+  via `File.ReadAllText` before anything reaches disk-backed storage - the
+  "honest surprise" README.md's memory/disk footprint section documents
+  (peak RAM scales with input size in both `BpeTokeniser.Train` and
+  `EncodeBulk`, not just disk). Fine at the few-MB scale measured so far;
+  a genuinely large corpus (hundreds of MB) would need tens of GB of RAM
+  with today's implementation. → TASK-029.
+- **The SFT CLI's `--steps`/`--batch-size` don't scale to a real dataset.**
+  The 6-example demo works by setting `--batch-size` equal to the dataset
+  size; a dataset of hundreds or thousands of (instruction, response)
+  pairs needs actual epoch-based training (shuffled passes over the whole
+  dataset) instead of a fixed step count the user has to hand-compute
+  against dataset size themselves. → TASK-030.

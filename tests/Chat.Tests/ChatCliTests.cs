@@ -200,4 +200,89 @@ public class ChatCliTests
 
         Assert.Equal(stdoutFirst, stdoutSecond);
     }
+
+    // TASK-027: instruction-tuned conversational mode.
+
+    [Fact]
+    public void Run_InstructionTunedFlag_CompletesConversationWithoutError()
+    {
+        var (exitCode, stdout, _) = Run("hello there\nhow are you\n/exit\n", CheckpointPath, VocabPath, "--instruction-tuned", "--max-new-tokens", "5");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Goodbye.", stdout);
+    }
+
+    [Fact]
+    public void Run_InstructionTunedFlag_BannerExplainsTheModeInsteadOfClaimingRawContinuation()
+    {
+        var (_, stdout, _) = Run("", CheckpointPath, VocabPath, "--instruction-tuned");
+
+        Assert.Contains("Instruction-tuned mode", stdout);
+        Assert.DoesNotContain("raw next-token-prediction model", stdout);
+    }
+
+    [Fact]
+    public void Run_WithoutInstructionTunedFlag_BannerStillSaysRawContinuation()
+    {
+        var (_, stdout, _) = Run("", CheckpointPath, VocabPath);
+
+        Assert.Contains("not an", stdout);
+        Assert.Contains("instruction-tuned assistant", stdout);
+    }
+
+    // TASK-028: adjustable context window.
+
+    [Fact]
+    public void Run_ContextLengthFlag_WithinModelMax_StillWorks()
+    {
+        var (exitCode, stdout, _) = Run("hello there\n/exit\n", CheckpointPath, VocabPath, "--context-length", "8", "--max-new-tokens", "5");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Goodbye.", stdout);
+    }
+
+    [Fact]
+    public void Run_ContextLengthFlag_ExceedingModelMaxSequenceLength_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run("", CheckpointPath, VocabPath, "--context-length", "999999");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("exceeds this model's MaxSequenceLength", stderr);
+    }
+
+    [Fact]
+    public void Run_ContextLengthFlag_ZeroOrNegative_IsRejectedAsMalformed()
+    {
+        var (exitCode, _, stderr) = Run("", CheckpointPath, VocabPath, "--context-length", "0");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unrecognised or malformed option", stderr);
+    }
+
+    [Fact]
+    public void Run_ContextLengthFlag_SmallerThanConversationTruncatesSoonerThanModelMaxWould()
+    {
+        // With a tight --context-length, only the tail of the conversation
+        // survives to be fed into generation each turn; with no flag (the
+        // model's own MaxSequenceLength - 32 for the fixture model), far
+        // more history is retained. Greedy sampling makes both runs
+        // deterministic, so if the truncation actually differs, the two
+        // conversations must diverge once enough turns have accumulated to
+        // matter.
+        string conversation = "one two three four five\nsix seven eight nine ten\neleven twelve thirteen fourteen\n/exit\n";
+
+        var (_, tightStdout, _) = Run(conversation, CheckpointPath, VocabPath, "--context-length", "4", "--temperature", "0", "--max-new-tokens", "5");
+        var (_, defaultStdout, _) = Run(conversation, CheckpointPath, VocabPath, "--temperature", "0", "--max-new-tokens", "5");
+
+        Assert.NotEqual(tightStdout, defaultStdout);
+    }
+
+    [Fact]
+    public void Run_NoContextLengthFlag_BehavesExactlyAsPassingTheModelsOwnMaxSequenceLength()
+    {
+        var (_, explicitStdout, _) = Run("hello there\n/exit\n", CheckpointPath, VocabPath, "--context-length", "32", "--temperature", "0", "--max-new-tokens", "5");
+        var (_, defaultStdout, _) = Run("hello there\n/exit\n", CheckpointPath, VocabPath, "--temperature", "0", "--max-new-tokens", "5");
+
+        Assert.Equal(explicitStdout, defaultStdout);
+    }
 }

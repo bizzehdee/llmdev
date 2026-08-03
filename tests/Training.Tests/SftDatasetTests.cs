@@ -82,6 +82,29 @@ public class SftDatasetTests
     }
 
     [Fact]
+    public void FormatPrompt_MatchesTheTemplateTokenizeUses()
+    {
+        var tokeniser = TrainFixtureTokeniser();
+        var example = new SftExample("What is the capital of France?", "Paris is the capital of France.");
+
+        var tokenized = SftDataset.Tokenize(example, tokeniser);
+        var promptIds = tokeniser.Encode(SftDataset.FormatPrompt(example.Instruction));
+
+        // The prompt tokens are exactly the templated-prompt tokens: the
+        // response mask flips to true right where they end (see
+        // Tokenize_ResponseMaskIsFalseForPromptPositionsAndTrueForResponsePositions),
+        // so callers like the chat CLI (TASK-027) can build a structurally
+        // identical prompt via FormatPrompt without duplicating the template.
+        Assert.Equal(promptIds.Count, Array.IndexOf(tokenized.ResponseMask, true) + 1);
+    }
+
+    [Fact]
+    public void InstructionMarker_IsThePrefixOfFormatPrompt()
+    {
+        Assert.StartsWith(SftDataset.InstructionMarker, SftDataset.FormatPrompt("anything"));
+    }
+
+    [Fact]
     public void Load_MalformedLineThrows()
     {
         var tokeniser = new BpeTokeniser();

@@ -16,7 +16,19 @@ public static class SftDataset
 {
     private const string PromptTemplate = "### Instruction:\n{0}\n\n### Response:\n";
 
+    /// <summary>
+    /// The literal marker that opens every templated prompt. Exposed so
+    /// callers that generate *from* a fine-tuned model (e.g. the chat CLI's
+    /// instruction-tuned mode, TASK-027) can detect where a response has
+    /// run on into a hallucinated next turn, without duplicating the
+    /// template string themselves.
+    /// </summary>
+    public const string InstructionMarker = "### Instruction:";
+
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>Wraps <paramref name="instruction"/> in the same prompt template <see cref="Tokenize"/> uses, so callers never duplicate the template string.</summary>
+    public static string FormatPrompt(string instruction) => string.Format(PromptTemplate, instruction);
 
     /// <summary>Reads every non-blank line as one JSON-encoded <see cref="SftExample"/>, tokenising each via <paramref name="tokeniser"/>.</summary>
     public static IReadOnlyList<SftTokenizedExample> Load(string path, BpeTokeniser tokeniser)
@@ -49,7 +61,7 @@ public static class SftDataset
     /// </summary>
     public static SftTokenizedExample Tokenize(SftExample example, BpeTokeniser tokeniser)
     {
-        var promptIds = tokeniser.Encode(string.Format(PromptTemplate, example.Instruction));
+        var promptIds = tokeniser.Encode(FormatPrompt(example.Instruction));
         var responseIds = tokeniser.Encode(example.Response);
 
         var allIds = promptIds.Concat(responseIds).ToArray();

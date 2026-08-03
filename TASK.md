@@ -394,6 +394,7 @@ depend on it - this can be built and tested independently of the CLI.
   mirroring `TrainerTests`' pretraining equivalent. Solution-wide branch
   coverage held (`Training` 98.8%).
   Depends on: TASK-011, TASK-012
+  Required by: TASK-030
 
 ## Known limitations follow-ups
 Added at the user's request: one follow-up task per item in PLAN.md's
@@ -465,6 +466,7 @@ end rather than re-numbered into size order).
   (multi-document corpora, an odd-length repeated-byte run, file-boundary
   non-merging, empty input, and `EncodedCorpus`'s out-of-range indexer).
   Depends on: TASK-002
+  Required by: TASK-029
 
 - [x] TASK-019: Optional disk-backed AdamW moment estimates - a
   constructor flag (e.g. `useDiskBackedState` + a scratch directory) on
@@ -640,6 +642,7 @@ end rather than re-numbered into size order).
   per TASK-024's methodology - `Tokeniser` at 92.6%, `Program.cs` itself
   excluded per AGENTS.md).
   Depends on: TASK-001
+  Required by: TASK-029
 
 ## Documentation
 Added at the user's request.
@@ -808,6 +811,7 @@ currently library-only, runnable only by pasting a C# snippet.
   checkpoint. `Sft` reached 100% branch coverage; solution-wide coverage
   held.
   Depends on: TASK-016, TASK-025
+  Required by: TASK-030
 
 ## Chat CLI improvements
 Added at the user's request: even with TASK-016's instruction tuning and
@@ -818,7 +822,7 @@ the user/learner is still expected to supply their own pretraining corpus
 and SFT dataset beyond the minimal `examples/sft-example.jsonl` starter, the
 same as every other stage.
 
-- [ ] TASK-027: Instruction-tuned conversational mode for the chat CLI -
+- [x] TASK-027: Instruction-tuned conversational mode for the chat CLI -
   today, `ChatCli` just appends each raw line of user input and each raw
   block of generated output to one growing token sequence, with no
   awareness that a fine-tuned model (TASK-016) actually expects
@@ -851,7 +855,29 @@ same as every other stage.
   Depends on: TASK-014, TASK-016
   Required by: TASK-028
 
-- [ ] TASK-028: Adjustable context window for the chat CLI - a CLI flag
+  **Done:** `SftDataset` now exposes `FormatPrompt(instruction)` and the
+  public `InstructionMarker` constant so no caller duplicates the template
+  string. `TextGenerator.GenerateTokenIdsUntilStopSequence` is new surface
+  area: it generates one token at a time, decodes only the newly-generated
+  tokens, and halts once that decoded text contains a stop sequence,
+  re-encoding the trimmed text rather than slicing raw token ids (a BPE
+  tokeniser's merges mean no fixed token-id sequence reliably spells a
+  given string - only decoded text does). `ChatCli` gained `--instruction-tuned`:
+  each turn's input is wrapped via `SftDataset.FormatPrompt` before
+  encoding, generation stops at `SftDataset.InstructionMarker`, and because
+  only the trimmed *response* text (never the marker) is appended back
+  into the running context, every prior turn ends up shaped like the
+  template automatically - no separate history-reformatting step needed.
+  Tests: `SftDatasetTests` proves `FormatPrompt` produces token-identical
+  output to `Tokenize`'s own prompt half; `TextGeneratorTests` proves the
+  new method matches plain generation when no stop sequence appears, halts
+  and trims correctly when one does (using an untrained byte-level
+  tokeniser for fully deterministic decode), and preserves the prompt
+  prefix; `ChatCliTests` proves the flag runs end-to-end and the banner
+  text changes accordingly. Updated README stage 10 with real captured
+  `--instruction-tuned` output, per this task's own note above.
+
+- [x] TASK-028: Adjustable context window for the chat CLI - a CLI flag
   (e.g. `--context-length <n>`) capping how many of the *most recent*
   tokens a conversation keeps before the existing sliding-window
   truncation (TASK-013/TASK-020) kicks in, independent of just waiting for
@@ -866,6 +892,89 @@ same as every other stage.
   max is rejected with a clear error, and the default (no flag) behaves
   exactly as today (the model's own `MaxSequenceLength`).
   Depends on: TASK-014, TASK-020, TASK-027
+
+  **Done:** `ChatCli` gained `--context-length <n>`, validated against the
+  loaded model's `MaxSequenceLength` right after loading (a value that's
+  too large is rejected with a clear error, never silently clamped).
+  Defaults to the model's own `MaxSequenceLength` when omitted, so existing
+  behaviour is unchanged by default. Applied via a small
+  `TruncateToContextLength` helper called each turn before generation, on
+  top of (not replacing) `TextGenerator`'s own `MaxSequenceLength` sliding
+  window - this cap can only be equal to or tighter than that window, never
+  looser, since it's validated against it. Tests: a small `--context-length`
+  measurably changes greedy, deterministic output versus the default (proof
+  it actually truncates sooner); a value exceeding `MaxSequenceLength` is
+  rejected; passing the model's own `MaxSequenceLength` explicitly produces
+  output identical to omitting the flag. Updated README stage 10 with real
+  captured `--context-length` output, per this task's own note above.
+
+## Scaling to a large real corpus / dataset
+
+Flagged while answering a question about running a 250-book (~230 MB)
+corpus through the pipeline: the "Memory and disk footprint" section of
+README.md already documents, from real measurement, that peak RAM scales
+roughly linearly with input text size (not just disk) - at 230 MB that
+extrapolates to somewhere around 18 GB just for the bulk-encode/training
+step, which is a genuine ceiling on this machine, not a footnote. Separately,
+the SFT CLI's current `--steps`/`--batch-size` flags are a fine fit for the
+6-example demo dataset but don't scale well to a dataset with hundreds or
+thousands of examples.
+
+- [ ] TASK-029: Stream `LinkedTokenStream.Build`'s input instead of
+  `File.ReadAllText` - the root cause identified in README.md's memory/disk
+  footprint section: `BpeTokeniser.Train` and `EncodeBulk` both go through
+  `LinkedTokenStream.Build`, which reads an entire input file into one
+  heap-resident string via `File.ReadAllText` and only *then* hands derived
+  data off to disk-backed (`MappedArray<T>`) storage - so peak RAM scales
+  with input file size despite the disk-backed design elsewhere. Needs
+  `PreTokeniser.Split`'s chunking (word/whitespace/punctuation-ish runs, a
+  regex pattern - TASK-022) to work incrementally against a stream/reader
+  in bounded-size blocks instead of one in-memory string, without letting a
+  chunk (or a multi-byte UTF-8 character) get split across a block
+  boundary - the read boundary must never become a new place merges can
+  wrongly cross, the same invariant TASK-022 already protects at chunk
+  boundaries. Test: peak managed heap usage (or at minimum, that no single
+  allocation/string scales with input size) stays flat as input size grows
+  across at least two genuinely different file sizes, while output
+  (vocab/encoded tokens) stays byte-for-byte identical to today's
+  `File.ReadAllText`-based result for the same input - this is a pure
+  performance fix, not a behaviour change, so parity with existing
+  encode/train output is the correctness bar. Update the README's memory/
+  disk footprint section once done - the "honest surprise" paragraph
+  describing this exact gap needs to say it's fixed, with fresh real
+  measurements at the same 2/4/10 MB sizes (plus a larger size, e.g.
+  100 MB+, to actually demonstrate flat RAM where the old numbers would
+  have shown it climbing).
+  Depends on: TASK-001, TASK-018, TASK-022
+
+- [ ] TASK-030: Automatic epoch-based training for the SFT CLI - today
+  `SftCli` takes a raw `--steps`/`--batch-size` pair with no relationship
+  to dataset size, which the README's own stage 9 example works around
+  manually (`--batch-size` set equal to the 6-example dataset size, so
+  every example contributes to every step). That doesn't scale to a
+  real dataset of hundreds or thousands of (instruction, response) pairs -
+  the CLI should decide a sensible split into epochs (one full pass over
+  the shuffled dataset) rather than making the user hand-compute
+  steps-vs-batch-size themselves. Needs a new `--epochs <n>` flag (default
+  a small number, e.g. 3, tuned against a real few-hundred-to-few-thousand-
+  example dataset, not just the 6-example demo) that replaces `--steps` as
+  the primary way to size a training run - each epoch is
+  `ceil(datasetSize / batchSize)` steps over a shuffled pass, so total
+  steps scale automatically with dataset size instead of being a fixed
+  number the user must already know is "enough" for their data. Decide
+  whether `--steps` stays as a lower-level escape hatch (e.g. mutually
+  exclusive with `--epochs`, one or the other) or is retired in favour of
+  epochs - needs to be resolved before implementation starts, not assumed.
+  Shuffling between epochs (not just within `BatchSampler`'s existing
+  window-drawing, which is pretraining's continuous-stream model, not
+  SFT's example-list model) is new surface area for `SftTrainer`/
+  `SftDataset`. Test: a dataset of a few hundred generated (instruction,
+  response) pairs trains for the expected number of steps at a given
+  `--epochs`/batch-size combination, loss trends down across epochs, and
+  the existing 6-example demo continues to work with sensible defaults
+  (not requiring the user to hand-tune `--batch-size` to the dataset size
+  as README's stage 9 example currently has to).
+  Depends on: TASK-016, TASK-026
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

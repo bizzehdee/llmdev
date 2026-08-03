@@ -39,30 +39,92 @@ public static class TextGenerator
         }
 
         using var cache = new GenerationCache(model.NumLayers);
-
         var context = tokens.Count > model.MaxSequenceLength
             ? tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray()
             : tokens.ToArray();
         var logits = model.ForwardIncremental(context, cache).Value;
-        tokens.Add(TokenSampler.Sample(ExtractRow(logits, logits.Shape[0] - 1), options, random));
 
-        for (int step = 1; step < maxNewTokens; step++)
+        for (int step = 0; step < maxNewTokens; step++)
         {
-            if (tokens.Count > model.MaxSequenceLength)
+            if (step > 0)
             {
-                cache.Reset();
-                context = tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray();
-                logits = model.ForwardIncremental(context, cache).Value;
+                (logits, context) = Advance(model, cache, tokens, context);
             }
-            else
-            {
-                logits = model.ForwardIncremental([tokens[^1]], cache).Value;
-            }
-
             tokens.Add(TokenSampler.Sample(ExtractRow(logits, logits.Shape[0] - 1), options, random));
         }
 
         return tokens;
+    }
+
+    /// <summary>
+    /// Like <see cref="GenerateTokenIds(GptModel, int[], int, SamplingOptions, Random?)"/>,
+    /// but halts before <paramref name="maxNewTokens"/> is reached once the
+    /// decoded text of the *newly generated* tokens contains
+    /// <paramref name="stopSequence"/>, trimming the return value back to
+    /// exclude the stop sequence and anything after it. Needed for
+    /// TASK-027's instruction-tuned chat mode: a response shouldn't run on
+    /// into a hallucinated next "### Instruction:" turn. This can't be a
+    /// token-id check - a BPE tokeniser's merges mean there's no fixed set
+    /// of token ids that reliably spells a given piece of text, only
+    /// decoded text does - so trimming re-encodes the truncated text
+    /// rather than slicing the raw generated token ids.
+    /// </summary>
+    public static List<int> GenerateTokenIdsUntilStopSequence(GptModel model, BpeTokeniser tokeniser, int[] promptTokenIds, int maxNewTokens, string stopSequence, SamplingOptions options, Random? random = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(stopSequence);
+
+        random ??= new Random();
+        var tokens = new List<int>(promptTokenIds);
+        if (maxNewTokens <= 0)
+        {
+            return tokens;
+        }
+
+        using var cache = new GenerationCache(model.NumLayers);
+        var context = tokens.Count > model.MaxSequenceLength
+            ? tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray()
+            : tokens.ToArray();
+        var logits = model.ForwardIncremental(context, cache).Value;
+
+        int promptLength = tokens.Count;
+        var generated = new List<int>();
+
+        for (int step = 0; step < maxNewTokens; step++)
+        {
+            if (step > 0)
+            {
+                (logits, context) = Advance(model, cache, tokens, context);
+            }
+
+            int next = TokenSampler.Sample(ExtractRow(logits, logits.Shape[0] - 1), options, random);
+            tokens.Add(next);
+            generated.Add(next);
+
+            string decoded = tokeniser.Decode(generated);
+            int stopIndex = decoded.IndexOf(stopSequence, StringComparison.Ordinal);
+            if (stopIndex >= 0)
+            {
+                var trimmedTokenIds = tokeniser.Encode(decoded[..stopIndex]);
+                var result = tokens.Take(promptLength).ToList();
+                result.AddRange(trimmedTokenIds);
+                return result;
+            }
+        }
+
+        return tokens;
+    }
+
+    /// <summary>One incremental decode step: rebuilds the cache from a sliding window if the context overflowed, otherwise feeds just the last token.</summary>
+    private static (TensorValue logits, int[] context) Advance(GptModel model, GenerationCache cache, List<int> tokens, int[] context)
+    {
+        if (tokens.Count > model.MaxSequenceLength)
+        {
+            cache.Reset();
+            context = tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray();
+            return (model.ForwardIncremental(context, cache).Value, context);
+        }
+
+        return (model.ForwardIncremental([tokens[^1]], cache).Value, context);
     }
 
     /// <summary>Encodes <paramref name="prompt"/>, generates, and decodes the full (prompt + generated) sequence back to text.</summary>
