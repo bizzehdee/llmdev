@@ -361,7 +361,7 @@ flagged there as genuinely out of scope, not just undone). Ordered
 smallest to largest, TASK-021/022 excepted (added later, appended at the
 end rather than re-numbered into size order).
 
-- [ ] TASK-017: Softmax numerical stability - add `Tensor.Max(axis,
+- [x] TASK-017: Softmax numerical stability - add `Tensor.Max(axis,
   keepDims)` (mirrors the existing `Sum`/`Mean` reductions in
   `Tensor.Reductions.cs`), then subtract the per-row max before `Exp()` in
   both `Variable.Softmax` (TASK-004) and `CrossEntropyLoss`'s
@@ -374,6 +374,20 @@ end rather than re-numbered into size order).
   be numerically identical for inputs that don't overflow either way) plus
   a new test using large-magnitude logits that would overflow/underflow
   without the fix.
+  Done: `Tensor.Max` added in `src/Tensor/Tensor.Reductions.cs`.
+  `Variable.Softmax` now subtracts `Value.Max(axis, keepDims: true)`
+  before `Exp` - purely a forward-pass change, since the backward pass
+  is expressed in terms of the already-computed softmax output, not the
+  subtraction. `CrossEntropyLoss.Compute` now computes logsumexp via the
+  shifted form (`max + log(sum(exp(x - max)))`), with the max wrapped as
+  a constant `Variable` (no parent op) to deliberately stop gradient
+  flowing through the max itself - correct since d(logsumexp)/dx_i =
+  softmax(x)_i regardless of the shift. Added large-magnitude-logit tests
+  (finite output, correct sum-to-one / shift-invariance) to
+  `VariableTests.cs` and `CrossEntropyLossTests.cs`, plus `Tensor.Max`
+  tests in `TensorTests.cs`. All existing finite-difference gradient
+  checks still pass unchanged; solution-wide branch coverage held at
+  97.4%.
   Depends on: TASK-004, TASK-011
 
 - [ ] TASK-018: Fast bulk-encode for `BpeTokeniser` - a second encode path

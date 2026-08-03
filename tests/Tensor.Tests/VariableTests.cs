@@ -264,6 +264,29 @@ public class VariableTests
     }
 
     [Fact]
+    public void Softmax_LargeMagnitudeLogits_StaysFiniteAndSumsToOne()
+    {
+        // TASK-017: without the max-subtraction stability trick, exp(1000)
+        // overflows to +Infinity and the result becomes NaN.
+        var x = new Variable(Tensor.FromValues([1000, 1001, 1002, -1000, -1001, -1002], [2, 3]));
+
+        var y = x.Softmax(axis: 1);
+
+        Assert.All(y.Value.ToArray(), v => Assert.True(float.IsFinite(v)));
+        var rowSums = y.Value.Sum(axis: 1).ToArray();
+        Assert.All(rowSums, s => Assert.Equal(1f, s, precision: 5));
+    }
+
+    [Fact]
+    public void Softmax_GradientMatchesFiniteDifferenceEvenWithLargeOffset()
+    {
+        // Shifting every logit in a row by a large constant shouldn't
+        // change the softmax gradient at all (softmax is shift-invariant),
+        // but would overflow without the safe-softmax trick.
+        CheckGradient(vars => vars[0].Softmax(axis: 1), RandomVariable([2, 3], min: 999f, max: 1001f));
+    }
+
+    [Fact]
     public void ChainedOps_GradientMatchesFiniteDifference()
     {
         // A small stand-in for a linear layer + activation + reduction,

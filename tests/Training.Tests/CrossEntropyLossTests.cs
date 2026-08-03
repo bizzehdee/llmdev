@@ -69,6 +69,22 @@ public class CrossEntropyLossTests
     }
 
     [Fact]
+    public void Compute_LargeMagnitudeLogits_StaysFiniteAndMatchesShiftedEquivalent()
+    {
+        // TASK-017: without the log-sum-exp shift, exp(1000) overflows to
+        // +Infinity and the loss becomes NaN. Shifting every logit in a row
+        // by the same constant shouldn't change the loss at all.
+        var values = new float[] { 1000, 1001, 1002 };
+        var shiftedValues = new float[] { 0, 1, 2 };
+
+        var loss = CrossEntropyLoss.Compute(new Variable(TensorValue.FromValues(values, [1, 3])), [1]);
+        var shiftedLoss = CrossEntropyLoss.Compute(new Variable(TensorValue.FromValues(shiftedValues, [1, 3])), [1]);
+
+        Assert.True(float.IsFinite(loss.Value.ToArray()[0]));
+        Assert.Equal(shiftedLoss.Value.ToArray()[0], loss.Value.ToArray()[0], precision: 4);
+    }
+
+    [Fact]
     public void Compute_GradientMatchesFiniteDifference()
     {
         var rng = new Random(7);

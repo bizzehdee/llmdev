@@ -22,14 +22,21 @@ public static class CrossEntropyLoss
     {
         int axis = logits.Value.Shape.Length - 1;
 
-        // log_softmax(x) = x - log(sum(exp(x))), computed this way (rather
-        // than Softmax().Log()) so the normalising constant is worked out
-        // in log-space directly instead of round-tripping through a
-        // softmax value that could already have underflowed to 0. Still no
-        // max-subtraction stability trick (see Variable.Softmax) - same
-        // caveat applies here.
-        var logSumExp = logits.Exp().Sum(axis, keepDims: true).Log();
-        var logSoftmax = logits.Subtract(logSumExp);
+        // log_softmax(x) = x - logsumexp(x), computed this way (rather than
+        // Softmax().Log()) so the normalising constant is worked out in
+        // log-space directly instead of round-tripping through a softmax
+        // value that could already have underflowed to 0. logsumexp(x) is
+        // computed via the standard shifted form - max(x) + log(sum(exp(x -
+        // max(x)))) - so every Exp argument stays <= 0 (TASK-017's "safe
+        // softmax" trick), avoiding overflow for large-magnitude logits.
+        // maxValue is wrapped as a constant (no parent op), which
+        // deliberately stops gradient flowing through the max itself -
+        // standard practice, and correct here since d(logsumexp)/dx_i =
+        // softmax(x)_i regardless of the shift.
+        var maxValue = new Variable(logits.Value.Max(axis, keepDims: true));
+        var shifted = logits.Subtract(maxValue);
+        var logSumExpShifted = shifted.Exp().Sum(axis, keepDims: true).Log();
+        var logSoftmax = shifted.Subtract(logSumExpShifted);
 
         var targetLogProbs = logSoftmax.GatherColumns(targetTokenIds);
         return targetLogProbs.Negate().Mean(axis: 0, keepDims: true);

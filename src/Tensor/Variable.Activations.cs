@@ -42,15 +42,20 @@ public sealed partial class Variable
     }
 
     /// <summary>
-    /// Softmax along <paramref name="axis"/>: exp(x) / sum(exp(x), axis).
-    /// No max-subtraction numerical-stability trick (see Tensor.Reductions
-    /// - there's no Max-along-axis reduction yet); fine at the input scales
-    /// this project is working with so far, but a candidate to revisit if
-    /// large logits ever cause overflow.
+    /// Softmax along <paramref name="axis"/>: exp(x - max(x)) / sum(exp(x - max(x)), axis).
+    /// Subtracting the per-row max before Exp (TASK-017's "safe softmax"
+    /// trick) doesn't change the result mathematically - it cancels in the
+    /// ratio - but keeps every Exp argument &lt;= 0, avoiding overflow for
+    /// large-magnitude logits. Only affects the forward computation: the
+    /// backward pass below is expressed purely in terms of the already-computed
+    /// softmax output (result.Value) and its incoming gradient, not the
+    /// subtraction itself, so no gradient-formula change is needed.
     /// </summary>
     public Variable Softmax(int axis)
     {
-        var expValue = Value.Exp();
+        var maxValue = Value.Max(axis, keepDims: true);
+        var shifted = Value.Subtract(maxValue);
+        var expValue = shifted.Exp();
         var sumValue = expValue.Sum(axis, keepDims: true);
         var value = expValue.Divide(sumValue);
 

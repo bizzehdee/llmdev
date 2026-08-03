@@ -390,6 +390,48 @@ public class TensorTests
     }
 
     [Fact]
+    public void Max_AlongAxis_ReducesAndDropsDimensionByDefault()
+    {
+        using var t = Tensor.FromValues([1, 5, 3, 9, 2, 6], [2, 3]);
+
+        using var maxRows = t.Max(axis: 1);
+        using var maxCols = t.Max(axis: 0);
+
+        Assert.Equal(new[] { 2 }, maxRows.Shape);
+        Assert.Equal(new float[] { 5, 9 }, maxRows.ToArray());
+
+        Assert.Equal(new[] { 3 }, maxCols.Shape);
+        Assert.Equal(new float[] { 9, 5, 6 }, maxCols.ToArray());
+    }
+
+    [Fact]
+    public void Max_KeepDims_PreservesRank()
+    {
+        using var t = Tensor.FromValues([1, 5, 3, 9, 2, 6], [2, 3]);
+
+        using var result = t.Max(axis: 1, keepDims: true);
+
+        Assert.Equal(new[] { 2, 1 }, result.Shape);
+        Assert.Equal(new float[] { 5, 9 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Max_NegativeAxisThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Max(axis: -1));
+    }
+
+    [Fact]
+    public void Max_AxisTooLargeThrows()
+    {
+        using var t = Tensor.Zeros([2, 3]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => t.Max(axis: 2));
+    }
+
+    [Fact]
     public void DiskBackedTensor_BehavesIdenticallyToHeapBacked()
     {
         using var heap = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
