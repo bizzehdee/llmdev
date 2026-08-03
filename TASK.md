@@ -1053,7 +1053,7 @@ say so plainly rather than assume NVIDIA/CUDA by default. Tasks are
 ordered as dependencies: wiring before a real kernel, a real kernel before
 CLI/demo integration.
 
-- [ ] TASK-031: ILGPU dependency, context, and backend-selection plumbing -
+- [x] TASK-031: ILGPU dependency, context, and backend-selection plumbing -
   no GPU math yet, just the ability to select a GPU backend and have it do
   *something* correctly. Add the ILGPU NuGet package(s) to `Tensor` (or a
   new project, if keeping ILGPU's `Context`/`Accelerator` lifetime
@@ -1078,6 +1078,39 @@ CLI/demo integration.
   itself may lack a GPU.
   Depends on: TASK-015
   Required by: TASK-032
+
+  **Done:** kept ILGPU's `Context`/`Accelerator` lifetime management
+  inside `Tensor` itself (a new `GpuContext` static class) rather than a
+  separate project - it's a peer of `TensorBackend`, not a distinct
+  concern. `TensorBackend` gained `Gpu`. `GpuContext.GetAccelerator(bool
+  allowCpuFallback = false)` lazily creates one process-wide `Context`
+  (`builder.Default()`, which enables every accelerator kind ILGPU
+  supports) and `Accelerator`, cached for reuse and torn down together via
+  `Shutdown()` (mainly for test isolation, since the accelerator is a
+  process-lifetime singleton otherwise). Real, on this specific dev
+  machine: despite a discrete AMD GPU (Radeon RX 6700 XT) and an OpenCL
+  ICD registration being present, the actual native OpenCL driver library
+  the ICD points at isn't installed in this environment, so ILGPU only
+  ever detects a CPU accelerator here - confirmed by direct probing before
+  writing any code, not assumed. That's exactly the case
+  `allowCpuFallback: false`'s error path exists for: rather than silently
+  training "on GPU" while actually running on CPU, `GetAccelerator`
+  refuses with a message naming every accelerator ILGPU actually found.
+  The decision logic itself is extracted into a pure, public
+  `ValidateAccelerator(AcceleratorType selected, bool allowCpuFallback,
+  IEnumerable<AcceleratorType> available)` specifically so it's
+  deterministically testable regardless of what hardware the test-running
+  machine has - CI or this machine, with or without a working GPU driver,
+  all exercise the exact same real code path. Tests: `GpuContextTests`
+  proves the throw/no-throw decision for CPU-selected-without-fallback,
+  CPU-selected-with-fallback, and Cuda/OpenCL-selected (both fallback
+  settings) purely via `AcceleratorType` values (no hardware dependency);
+  a hardware-touching test proves `GetAccelerator(allowCpuFallback: true)`
+  returns a real, working `Accelerator` (allocates a device buffer, copies
+  data to it, reads it back) on whatever accelerator is actually present;
+  further tests prove caching (repeated calls return the same instance)
+  and `Shutdown` (forces a fresh one next call). `Tensor` assembly:
+  `GpuContext` at 100% branch coverage; solution-wide 421 tests passing.
 
 - [ ] TASK-032: A real GPU-accelerated matmul kernel via ILGPU - the actual
   math, building on TASK-031's plumbing. Matmul first, per TASK-015's own
