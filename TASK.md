@@ -644,7 +644,7 @@ end rather than re-numbered into size order).
 ## Documentation
 Added at the user's request.
 
-- [ ] TASK-023: Rewrite README.md as a lesson plan - walk through the whole
+- [x] TASK-023: Rewrite README.md as a lesson plan - walk through the whole
   process from a directory of raw `.txt` files all the way to a usable
   chatbot, one section per stage (mirroring PLAN.md's stage list), each
   covering: what problem that stage solves and what's actually happening
@@ -654,6 +654,22 @@ Added at the user's request.
   yet (TASK-014 chat CLI, TASK-016 instruction tuning) - be clear about
   what's runnable today versus what's planned, don't present unbuilt stages
   as if they already work.
+  Done: rewritten as ten numbered stages mirroring PLAN.md's stage list
+  exactly (tokeniser, tensor/autodiff, embeddings, attention/transformer
+  block, model assembly, training loop, generation, chat CLI, optional
+  `--optimised` backend, instruction tuning), each with what problem it
+  solves, what's conceptually happening, source files to read, and a
+  runnable command (a CLI invocation where one exists - tokeniser, chat -
+  or the relevant test project/worked code snippet otherwise). By the
+  time this task landed, every other planned task was already done, so
+  unlike the task's original framing there were no not-yet-built stages
+  left to caveat - the one honest caveat carried over instead: the chat
+  CLI doesn't automatically apply the SFT prompt template, so a
+  fine-tuned model needs prompts shaped to match it by hand. Project
+  layout and status sections updated to match current reality (all ten
+  stages plus the optimised backend, `Chat` project included, "known
+  limitations" trimmed to what's still actually true - GPU/distributed
+  training remains the one genuinely out-of-scope item).
   Depends on: TASK-013
 
 ## Test coverage
