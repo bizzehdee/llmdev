@@ -266,11 +266,25 @@ public sealed class BpeTokeniser
         public required MappedArray<int> PairNext;
         public required int Length;
 
+        /// <summary>
+        /// Each pre-tokenisation chunk (TASK-022) becomes its own
+        /// "document" here, exactly like each whole file used to be:
+        /// merges must never cross a chunk boundary any more than they
+        /// may cross a file boundary, so chunk boundaries get the same
+        /// -1 Prev/Next sentinels file boundaries already relied on. Only
+        /// genuinely empty chunks are skipped (<c>Length &gt; 0</c>, not
+        /// <c>&gt; 1</c> as when "documents" meant whole files): a
+        /// single-byte chunk - a lone space or punctuation mark, both
+        /// common once splitting happens per-chunk rather than per-file -
+        /// contributes no pairs but must still appear in the output, or
+        /// <see cref="EncodeBulk"/> would silently drop it.
+        /// </summary>
         public static LinkedTokenStream Build(IEnumerable<string> filePaths, string scratchDirectory)
         {
             var documents = filePaths
-                .Select(File.ReadAllBytes)
-                .Where(bytes => bytes.Length > 1)
+                .SelectMany(path => PreTokeniser.Split(File.ReadAllText(path)))
+                .Select(chunk => Encoding.UTF8.GetBytes(chunk))
+                .Where(bytes => bytes.Length > 0)
                 .ToList();
 
             int total = documents.Sum(d => d.Length);
@@ -305,13 +319,31 @@ public sealed class BpeTokeniser
     }
 
     /// <summary>
-    /// Encodes text into token IDs by starting from raw UTF-8 bytes and
-    /// repeatedly applying the learned merge with the lowest rank (i.e. the
-    /// merge learned earliest during training) until no merge applies.
+    /// Encodes text into token IDs: split into chunks (TASK-022's
+    /// <see cref="PreTokeniser"/>, the same one <see cref="Train"/> uses,
+    /// so merges never cross a boundary at encode time that they didn't
+    /// at train time), then each chunk is merge-scanned independently and
+    /// the results concatenated - a merge can join bytes within a chunk,
+    /// never across two chunks.
     /// </summary>
     public List<int> Encode(string text)
     {
-        var ids = Encoding.UTF8.GetBytes(text).Select(b => (int)b).ToList();
+        var result = new List<int>();
+        foreach (var chunk in PreTokeniser.Split(text))
+        {
+            result.AddRange(EncodeChunk(chunk));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Starts from a chunk's raw UTF-8 bytes and repeatedly applies the
+    /// learned merge with the lowest rank (i.e. the merge learned earliest
+    /// during training) until no merge applies.
+    /// </summary>
+    private List<int> EncodeChunk(string chunk)
+    {
+        var ids = Encoding.UTF8.GetBytes(chunk).Select(b => (int)b).ToList();
 
         while (ids.Count > 1)
         {

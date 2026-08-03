@@ -519,7 +519,7 @@ end rather than re-numbered into size order).
   clock varies too much across environments to be a reliable test.
   Depends on: TASK-003
 
-- [ ] TASK-022: Modern regex-based pre-tokenisation for the BPE tokeniser -
+- [x] TASK-022: Modern regex-based pre-tokenisation for the BPE tokeniser -
   split text into chunks (word/whitespace/punctuation-ish runs) *before*
   BPE merge-learning and encoding, so merges never cross a chunk boundary
   in ways that produce bad tokens (e.g. merging a trailing space into a
@@ -541,6 +541,34 @@ end rather than re-numbered into size order).
   commit message), not just here. Test that merges never cross a chunk
   boundary, and that encode/decode stays an exact roundtrip through the
   new chunking.
+  Done: new `Tokeniser.PreTokeniser.Split` (`src/Tokeniser/PreTokeniser.cs`)
+  splits text via a `cl100k_base`-style pattern (contractions split from
+  their stem, letter runs absorbing one leading non-letter/non-digit
+  character, digit runs capped at 3, punctuation/symbol runs kept
+  together, whitespace runs) using non-possessive quantifiers (a
+  correctness-neutral portability simplification vs. the reference
+  pattern's possessive ones - not worth the added complexity at this
+  project's scale). `LinkedTokenStream.Build` (shared by `Train` and
+  `EncodeBulk`) now treats each chunk as its own "document" the same way
+  each whole file used to be, so chunk boundaries get the same -1
+  Prev/Next sentinels file boundaries already relied on; `Encode` splits
+  into chunks and merge-scans each independently, concatenating results.
+  Found and fixed a real bug surfaced by the `EncodeBulk` parity tests
+  while making this change: `LinkedTokenStream.Build`'s pre-existing
+  `bytes.Length > 1` filter (meant to skip degenerate whole-file
+  documents) was silently dropping every single-character chunk once
+  "documents" became per-chunk rather than per-file - very common (any
+  lone space or punctuation mark) and a real, not cosmetic, data-loss bug
+  for `EncodeBulk`. Changed to `> 0` (skip only genuinely empty chunks).
+  Tested: `PreTokeniser.Split` directly (canonical chunking examples, plus
+  an exact-reconstruction property test across varied Unicode input -
+  emoji, CJK, contractions, mixed whitespace, empty string); a
+  chunk-boundary test confirming every chunk in a trained corpus still
+  encodes/decodes to itself exactly (no merge crossing a boundary); and
+  full encode-then-decode roundtrip tests through the new chunking.
+  Solution-wide branch coverage held (measured per production assembly,
+  per TASK-024's methodology - `Tokeniser` at 92.6%, `Program.cs` itself
+  excluded per AGENTS.md).
   Depends on: TASK-001
 
 ## Documentation

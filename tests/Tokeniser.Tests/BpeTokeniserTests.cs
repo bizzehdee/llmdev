@@ -140,6 +140,63 @@ public class BpeTokeniserTests
     }
 
     [Fact]
+    public void Train_MergesNeverCrossAChunkBoundary()
+    {
+        // TASK-022: "e " (word-final e followed by a space) is extremely
+        // frequent in this corpus, but the space starts a *new* chunk
+        // (the leading-space rule attaches a space to the *next* word, not
+        // the previous one) - so no merge should ever join a word-final
+        // letter to the following space.
+        var path = WriteTempFile(string.Concat(Enumerable.Repeat("the quick brown fox jumps over the lazy dog goes home ", 60)));
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { path }, targetVocabSize: 320, scratchDirectory: ScratchDirectory);
+
+            foreach (var chunk in PreTokeniser.Split(File.ReadAllText(path)))
+            {
+                if (chunk.Length == 0)
+                {
+                    continue;
+                }
+                // Every chunk must encode to a token sequence whose bytes
+                // reconstruct exactly that chunk - if a merge had crossed a
+                // chunk boundary during training, decoding a token learned
+                // from two different chunks concatenated wouldn't equal
+                // any single original chunk.
+                var encoded = tokeniser.Encode(chunk);
+                Assert.Equal(chunk, tokeniser.Decode(encoded));
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("the quick brown fox jumps over the lazy dog. don't stop, 12345 times!!")]
+    [InlineData("emoji test \U0001F600 done, and CJK: 你好世界。")]
+    [InlineData("  leading and trailing whitespace   \n\nwith blank lines\n")]
+    public void Encode_ThenDecode_RoundtripsExactlyAfterChunking(string corpus)
+    {
+        var path = WriteTempFile(corpus);
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train(new[] { path }, targetVocabSize: 300, scratchDirectory: ScratchDirectory);
+
+            var encoded = tokeniser.Encode(corpus);
+
+            Assert.Equal(corpus, tokeniser.Decode(encoded));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void SaveThenLoad_ProducesEquivalentTokeniser()
     {
         var corpus = "the quick brown fox jumps over the lazy dog. the dog barks. the fox runs.";
