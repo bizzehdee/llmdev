@@ -1188,7 +1188,7 @@ CLI/demo integration.
   unchanged to additionally confirm that. Solution-wide: 431 tests
   passing; `Tensor.GpuContext` 100%, `Tensor.Tensor` 99.2% branch coverage.
 
-- [ ] TASK-033: Wire the GPU backend into a CLI and demonstrate it end to
+- [x] TASK-033: Wire the GPU backend into a CLI and demonstrate it end to
   end in README.md (a new stage 11 section, mirroring stage 9's
   `--optimised` treatment). Add a `--gpu` flag (name TBD - resolve any
   clash/overlap with `--optimised` before implementation: are `--gpu` and
@@ -1208,6 +1208,49 @@ CLI/demo integration.
   Update PLAN.md's "Known limitations / deferred" section once done to
   reflect single-GPU execution as delivered, not just planned.
   Depends on: TASK-025, TASK-032
+
+  **Done:** resolved the flag question up front - `--gpu` and `--optimised`
+  select different `TensorBackend` values and are mutually exclusive (an
+  error if both are given), added to `PretrainCli` (the heaviest compute,
+  most likely to show a measurable difference; `Sft`/`Chat` weren't
+  touched - not required, and this project's demo-sized models don't move
+  enough matmul volume through them to show anything). `--gpu` runs a
+  *preflight* check (`GpuContext.GetAccelerator`) before any training work
+  starts: by default it requires a genuine CUDA/OpenCL accelerator and
+  refuses with a clear, actionable error naming what it actually found,
+  rather than silently training on ILGPU's CPU accelerator while claiming
+  to demonstrate GPU execution; `--gpu-allow-cpu-fallback` opts into
+  accepting that CPU accelerator anyway.
+
+  **The honest finding this task asked for, found by actually measuring
+  rather than assuming:** this project's dev machine can't currently
+  exercise real GPU hardware through this backend at all - a discrete AMD
+  GPU and OpenCL ICD registration are present, but the native driver
+  library the ICD points at is missing in this environment (confirmed by
+  direct probing during TASK-031, not assumed), so `--gpu` only ever finds
+  ILGPU's own CPU accelerator here. Given that, the wall-clock comparison
+  necessarily compares CPU paths against ILGPU's CPU accelerator, not real
+  GPU silicon - and even so, it's a genuinely informative result: on a
+  toy-sized demo (2-layer, 64-dim, 30 steps, batch size 4), GPU execution
+  was *slower* than either CPU path (35.5s vs. 25.4s scalar, 24.3s
+  optimised) - per-matmul host↔device allocation/transfer overhead
+  dominates at this scale before any execution-parallelism advantage could
+  pay for itself. Documented plainly in README.md's new stage 11 section
+  and its Project status section, exactly the way the memory/disk
+  footprint section's own "honest surprise" (TASK-029) was, not glossed
+  over. PLAN.md's "Known limitations / deferred" GPU bullet updated to
+  reflect this as delivered-with-a-caveat, not merely planned.
+
+  Tests: `PretrainCliTests` proves `--gpu`+`--optimised` together is a
+  clear error, `--gpu-allow-cpu-fallback` without `--gpu` is a clear error,
+  `--gpu --gpu-allow-cpu-fallback` selects `TensorBackend.Gpu` and
+  completes a real training run end to end on any machine, and - without
+  hardcoding an assumption either way about hardware - a test that asks
+  `GpuContext` directly what it would decide and proves the CLI's strict
+  `--gpu` (no fallback) behaves consistently with that; on this machine,
+  that test exercises the real "no GPU found" error path end to end
+  through the CLI, not just at the unit level. Solution-wide: 435 tests
+  passing; `Pretrain.PretrainCli` at 100% branch coverage.
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

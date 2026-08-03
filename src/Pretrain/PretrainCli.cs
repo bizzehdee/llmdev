@@ -29,11 +29,18 @@ public static class PretrainCli
             stdout.WriteLine("Usage: Pretrain <vocab-path> <output-checkpoint-path> <corpus-file-or-directory> [file-or-directory ...]");
             stdout.WriteLine("  [--embedding-dim <n>] [--layers <n>] [--heads <n>] [--context-length <n>]");
             stdout.WriteLine("  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>]");
-            stdout.WriteLine("  [--scratch-dir <dir>] [--optimised]");
+            stdout.WriteLine("  [--scratch-dir <dir>] [--optimised | --gpu [--gpu-allow-cpu-fallback]]");
             stdout.WriteLine();
             stdout.WriteLine("Trains a fresh GptModel from scratch on the given corpus, using a tokeniser");
             stdout.WriteLine("vocabulary already trained via the Tokeniser CLI, and saves the result as a");
             stdout.WriteLine("checkpoint. Directories are expanded to their *.txt files.");
+            stdout.WriteLine();
+            stdout.WriteLine("--gpu (TASK-033) selects the ILGPU-backed matmul path and requires a genuine");
+            stdout.WriteLine("CUDA/OpenCL accelerator by default - it refuses with a clear error rather than");
+            stdout.WriteLine("silently training on ILGPU's CPU accelerator. Pass --gpu-allow-cpu-fallback to");
+            stdout.WriteLine("accept that CPU accelerator anyway (useful for exercising the mechanism on a");
+            stdout.WriteLine("machine without a working GPU driver). --gpu and --optimised select different");
+            stdout.WriteLine("backends and cannot be combined.");
             return 1;
         }
 
@@ -44,6 +51,8 @@ public static class PretrainCli
         float learningRate = 3e-4f, weightDecay = 0.01f;
         string scratchDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pretrain-scratch");
         bool optimised = false;
+        bool gpu = false;
+        bool gpuAllowCpuFallback = false;
 
         var positionalArgs = new List<string>();
         for (int i = 2; i < args.Length; i++)
@@ -89,6 +98,12 @@ public static class PretrainCli
                 case "--optimised":
                     optimised = true;
                     break;
+                case "--gpu":
+                    gpu = true;
+                    break;
+                case "--gpu-allow-cpu-fallback":
+                    gpuAllowCpuFallback = true;
+                    break;
                 default:
                     if (args[i].StartsWith("--", StringComparison.Ordinal))
                     {
@@ -98,6 +113,18 @@ public static class PretrainCli
                     positionalArgs.Add(args[i]);
                     break;
             }
+        }
+
+        if (optimised && gpu)
+        {
+            stderr.WriteLine("Specify either --optimised or --gpu, not both - they select different Tensor backends.");
+            return 1;
+        }
+
+        if (gpuAllowCpuFallback && !gpu)
+        {
+            stderr.WriteLine("--gpu-allow-cpu-fallback only makes sense together with --gpu.");
+            return 1;
         }
 
         if (positionalArgs.Count == 0)
@@ -145,6 +172,24 @@ public static class PretrainCli
         if (optimised)
         {
             Tensor.Tensor.Backend = TensorBackend.Optimised;
+        }
+        else if (gpu)
+        {
+            // Preflight, before any training work starts: refuses with a
+            // clear error here (TASK-031's GpuContext.GetAccelerator) rather
+            // than silently running on ILGPU's CPU accelerator while
+            // claiming to demonstrate GPU execution, unless the user
+            // explicitly said that's fine via --gpu-allow-cpu-fallback.
+            try
+            {
+                GpuContext.GetAccelerator(gpuAllowCpuFallback);
+            }
+            catch (InvalidOperationException ex)
+            {
+                stderr.WriteLine(ex.Message);
+                return 1;
+            }
+            Tensor.Tensor.Backend = TensorBackend.Gpu;
         }
 
         stdout.WriteLine($"Bulk-encoding {corpusFiles.Count} corpus file(s)...");

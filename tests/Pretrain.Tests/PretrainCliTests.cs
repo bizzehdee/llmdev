@@ -141,4 +141,102 @@ public class PretrainCliTests
             Tensor.Tensor.Backend = Tensor.TensorBackend.Scalar;
         }
     }
+
+    // TASK-033: --gpu.
+
+    [Fact]
+    public void Run_GpuAndOptimisedFlagsTogether_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run(VocabPath, "out.checkpoint", CorpusPath, "--optimised", "--gpu");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Specify either --optimised or --gpu, not both", stderr);
+    }
+
+    [Fact]
+    public void Run_GpuAllowCpuFallbackWithoutGpuFlag_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run(VocabPath, "out.checkpoint", CorpusPath, "--gpu-allow-cpu-fallback");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--gpu-allow-cpu-fallback only makes sense together with --gpu", stderr);
+    }
+
+    [Fact]
+    public void Run_GpuFlagWithoutCpuFallback_MatchesGpuContextsOwnAcceleratorDetection()
+    {
+        // Doesn't hardcode "must fail" - that would assume no real GPU is
+        // ever present, which isn't a safe assumption to bake into a test.
+        // Instead: ask GpuContext directly what it would decide, then prove
+        // the CLI's --gpu (no fallback) behaves consistently with that -
+        // on this dev machine (no working GPU driver, see TASK-031), that
+        // means proving the CLI's "no GPU found" error path actually fires
+        // end to end, not just in GpuContextTests' unit-level coverage.
+        bool expectFailure;
+        try
+        {
+            Tensor.GpuContext.GetAccelerator(allowCpuFallback: false);
+            expectFailure = false;
+        }
+        catch (InvalidOperationException)
+        {
+            expectFailure = true;
+        }
+        finally
+        {
+            Tensor.GpuContext.Shutdown();
+        }
+
+        string checkpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        try
+        {
+            var (exitCode, _, stderr) = Run(
+                VocabPath, checkpointPath, CorpusPath,
+                "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+                "--steps", "2", "--batch-size", "2", "--gpu");
+
+            if (expectFailure)
+            {
+                Assert.Equal(1, exitCode);
+                Assert.Contains("No GPU accelerator", stderr);
+            }
+            else
+            {
+                Assert.Equal(0, exitCode);
+            }
+        }
+        finally
+        {
+            Tensor.Tensor.Backend = Tensor.TensorBackend.Scalar;
+            Tensor.GpuContext.Shutdown();
+        }
+    }
+
+    [Fact]
+    public void Run_GpuFlagWithCpuFallbackAllowed_SelectsGpuTensorBackendAndSucceeds()
+    {
+        // allowCpuFallback: true makes this succeed on any machine, real
+        // GPU or not - proving the CLI wiring end to end (flag parsing,
+        // GpuContext preflight, backend selection, a real training run
+        // that actually uses TensorBackend.Gpu matmuls) without assuming
+        // this machine has a working GPU driver.
+        string checkpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        try
+        {
+            var (exitCode, stdout, stderr) = Run(
+                VocabPath, checkpointPath, CorpusPath,
+                "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+                "--steps", "2", "--batch-size", "2", "--gpu", "--gpu-allow-cpu-fallback");
+
+            Assert.Equal(0, exitCode);
+            Assert.Empty(stderr);
+            Assert.Equal(Tensor.TensorBackend.Gpu, Tensor.Tensor.Backend);
+            Assert.True(File.Exists(checkpointPath));
+        }
+        finally
+        {
+            Tensor.Tensor.Backend = Tensor.TensorBackend.Scalar;
+            Tensor.GpuContext.Shutdown();
+        }
+    }
 }

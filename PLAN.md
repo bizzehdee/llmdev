@@ -359,13 +359,23 @@ that category, see stage 11 above and TASK-031 onward:
   `Parallel.ForEach` - BCL, not a "no libraries" exception the way
   TASK-015 is, any more than `MemoryMappedFile` or `async`/`await` are).
   → TASK-021.
-- **No GPU-accelerated backend** - every `Tensor` op runs on the CPU today
+- **No GPU-accelerated backend** - every `Tensor` op ran on the CPU only
   (the hand-written scalar path, or TASK-015's Math.NET/
   `System.Numerics.Tensors` fast path), never a GPU, so GPU-based training
-  can only be described, not demonstrated. → stage 11 above, TASK-031
-  onward (ILGPU), added at the user's explicit request specifically to
-  close this gap - not previously planned, and mixed precision/multi-GPU
-  training remain out of scope even once single-GPU execution lands.
+  could only be described, not demonstrated. → stage 11 above, delivered by
+  TASK-031/032/033 (ILGPU), added at the user's explicit request
+  specifically to close this gap - not previously planned. Mixed
+  precision/multi-GPU training remain out of scope. **Honest caveat, not a
+  loose end:** this project's own dev machine cannot currently exercise
+  real GPU hardware through this backend - a discrete AMD GPU and OpenCL
+  ICD registration are present, but the native driver library the ICD
+  points at is missing in this environment, so `--gpu` only ever finds
+  ILGPU's own CPU accelerator here (confirmed directly, not assumed). The
+  mechanism itself - kernel, accelerator detection/preflight, CLI wiring,
+  test coverage - is genuinely complete and correct; only the specific
+  claim "verified against real GPU silicon" doesn't hold *on this machine
+  as currently configured*. A machine with a working CUDA/OpenCL driver
+  gets real GPU execution with no code changes.
 - Distributed (multi-machine) training — out of scope for now, not
   planned or tasked. Unlike GPU execution before this update, there's no
   standing user request driving this one, so it stays undone rather than

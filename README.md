@@ -2,19 +2,20 @@
 
 A personal project to learn how LLMs work by building one from first
 principles in C#/.NET — no ML, tokenisation, or tensor/autodiff libraries
-(one narrow, explicitly-scoped exception: an opt-in `--optimised` fast path
-for tensor math, stage 8 below — off by default, and not a replacement for
-the hand-written implementation it speeds up). Every mechanism (tokeniser,
-tensor math, autodiff, attention, training loop, generation, instruction
-tuning) is written by hand so it's understood, not a black box behind a
-library call.
+(two narrow, explicitly-scoped exceptions, both opt-in and off by default,
+neither a replacement for the hand-written implementation it speeds up: a
+`--optimised` fast path for tensor math, stage 8 below; and a `--gpu` path
+via ILGPU, stage 11 below, added specifically to demonstrate GPU-based
+training). Every mechanism (tokeniser, tensor math, autodiff, attention,
+training loop, generation, instruction tuning) is written by hand so it's
+understood, not a black box behind a library call.
 
 This README is a lesson plan: one section per stage, each covering what
 problem the stage solves, what's actually happening conceptually, which
 source files to go read, and what to run to see it working. Every stage
 below is built and runnable today — see [Project status](#project-status)
-for the one honest caveat worth knowing about before you expect too much of
-it as a chatbot.
+for the honest caveats worth knowing before you expect too much of it as a
+chatbot, or of its `--gpu` flag as a real GPU benchmark on every machine.
 
 Stages are numbered in the order it makes sense to *approach* them, not the
 order they were originally built in — see [PLAN.md](PLAN.md) if you want the
@@ -31,10 +32,12 @@ Two different kinds of section follow, and it matters which is which:
   (a trained vocabulary, a checkpoint) and are things you actually *run*.
   Every one of these includes a real example command and the real output it
   produced when this README was written.
-- **Stages without a CLI** (2–5, 7, 8) are learning steps: library code with
-  no standalone command of its own, exercised only by tests and by the CLI
-  stages above/after them. Understanding what they do is what makes the CLI
-  stages make sense, but there's nothing new to *run* for them beyond
+- **Stages without a CLI** (2–5, 7, 8, 11) are learning steps: library code
+  with no standalone command of its own, exercised only by tests and by the
+  CLI stages above/after them (8 and 11 are flags on those CLIs, not
+  learning steps in the usual sense, but still nothing you run standalone).
+  Understanding what they do is what makes the CLI stages make sense, but
+  there's nothing new to *run* for them beyond
   `dotnet test`.
 
 ## Requirements
@@ -640,6 +643,114 @@ cd tests/Chat.Tests && dotnet test
 cd tests/Generation.Tests && dotnet test
 ```
 
+## Stage 11 — Optional GPU-accelerated backend (ILGPU)
+
+*(No CLI of its own — a flag (`--gpu`) accepted by the stage 6 CLI, the
+same way stage 8's `--optimised` is, not a pipeline stage you run on its
+own. Added after the original plan, at the user's explicit request
+specifically to demonstrate GPU-based training as part of this lesson
+plan.)*
+
+**Problem it solves:** stages 2 and 8 only ever run on the CPU - the
+hand-written scalar path, or stage 8's SIMD-accelerated one. Neither can
+demonstrate what GPU-based training actually looks like.
+
+**What's happening:** a third, opt-in `Tensor.MatMul` backend
+(`TensorBackend.Gpu`), backed by [ILGPU](https://github.com/m4rs-mt/ILGPU) -
+this project's second and only other deliberate library exception, alongside
+stage 8's. ILGPU JIT-compiles ordinary C# into a real GPU kernel (CUDA,
+OpenCL, or its own CPU accelerator) at runtime, so - the same justification
+as stage 8's - this project still writes and owns the actual matmul kernel
+(`Tensor.MatMulGpu`/`MatMulKernel` in `src/Tensor/Tensor.MatMul.Gpu.cs`)
+itself; the library changes *where* it runs, not who wrote it. `GpuContext`
+(`src/Tensor/GpuContext.cs`) manages one process-wide ILGPU `Context`/
+`Accelerator`, created lazily and reused. Selecting `--gpu` on the
+pretraining CLI runs a *preflight* check before any training starts: by
+default it requires a genuine CUDA or OpenCL accelerator and refuses with a
+clear error if none is found, rather than silently training on ILGPU's own
+CPU accelerator while claiming to demonstrate GPU execution - pass
+`--gpu-allow-cpu-fallback` to accept that CPU accelerator anyway (real
+command, real output, both below). `--gpu` and `--optimised` select
+different backends and can't be combined.
+
+**Honest finding, measured on this machine, not assumed:** this project's
+own dev machine has a discrete AMD GPU (Radeon RX 6700 XT / Navi 22) and an
+OpenCL ICD registration for it - but the actual native OpenCL driver
+library the registration points at isn't installed in this development
+environment, so ILGPU only ever detects a CPU accelerator here (confirmed
+directly - see `--gpu`'s strict-mode output below). That's a genuine,
+specific-to-this-environment limitation, not a design flaw in the code:
+`GetAccelerator` already prefers a real GPU whenever `Context.Devices`
+reports one, no code change needed on a machine with a working driver.
+Since a real GPU genuinely isn't reachable here, the wall-clock comparison
+below necessarily compares scalar/optimised CPU paths against ILGPU's *own*
+CPU accelerator, not real GPU silicon - and even so, it's still a real,
+informative result: on this toy-sized demo model, running the exact same
+30 training steps, GPU execution (`--gpu-allow-cpu-fallback`) was **slower**
+than either CPU path (35.5s vs. 25.4s scalar, 24.3s optimised) - host↔device
+buffer allocation/transfer overhead on every single matmul call dominates
+at this scale, before any parallel-execution advantage a real GPU might
+otherwise provide has a chance to pay for itself. This is exactly the kind
+of result worth reporting plainly rather than only publishing a flattering
+number - the same honesty this README's memory/disk footprint section
+already commits to.
+
+**Source files:** `src/Tensor/GpuContext.cs`, `src/Tensor/Tensor.MatMul.Gpu.cs`,
+`src/Tensor/TensorBackend.cs`, `src/Pretrain/PretrainCli.cs`.
+
+**Run it:** no CLI of its own - pass `--gpu` (and, on a machine without a
+working CUDA/OpenCL driver, `--gpu-allow-cpu-fallback`) to the
+[pretraining CLI](#stage-6--training-loop). Real command, real output -
+strict mode refusing on this machine, since no genuine GPU accelerator is
+reachable here:
+
+```text
+$ dotnet run -- vocab.bpe out.checkpoint big_corpus.txt --gpu
+
+No GPU accelerator (CUDA or OpenCL) was found - only: CPU. Pass an explicit CPU-fallback
+option to run ILGPU's CPU accelerator instead (useful for testing the mechanism without
+real GPU hardware), or use --optimised for the CPU-only fast path.
+```
+
+Wall-clock comparison, same corpus/model/step count throughout (a small
+2-layer, 64-dim model, 30 steps, batch size 4, context length 64 - toy-sized
+by design, same as every other worked example in this README):
+
+| Backend | Flag | Wall-clock (`real`, `time`) |
+|---|---|---|
+| Scalar (default) | *(none)* | 25.4s |
+| Optimised (stage 8) | `--optimised` | 24.3s |
+| GPU (ILGPU, CPU accelerator on this machine) | `--gpu --gpu-allow-cpu-fallback` | 35.5s |
+
+```text
+$ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
+    --embedding-dim 64 --layers 2 --heads 2 --context-length 64 \
+    --steps 30 --batch-size 4 --learning-rate 0.0003 --gpu --gpu-allow-cpu-fallback
+
+Bulk-encoding 1 corpus file(s)...
+Training a 2-layer, 64-dim GptModel for 30 steps (batch size 4, context length 64, 3840 tokens)...
+step 0: loss 6.1459
+step 29: loss 5.0912
+Saved checkpoint to model.checkpoint.
+```
+
+**Source files** (tests): `tests/Tensor.Tests/{GpuContextTests,TensorTests,VariableTests}.cs`,
+`tests/Pretrain.Tests/PretrainCliTests.cs`.
+
+```bash
+cd tests/Tensor.Tests && dotnet test
+cd tests/Pretrain.Tests && dotnet test
+```
+
+verified by running the *same* test suite (including every gradient check)
+against the `Gpu` backend too, the same way stage 8's `--optimised` is
+verified - see the `[Theory]`-parametrised tests in `TensorTests.cs`/
+`VariableTests.cs`. On this machine those `Gpu` cases run against ILGPU's
+CPU accelerator (no working GPU driver here, as above), proving the
+kernel's *math* is correct; anyone with a working CUDA/OpenCL setup can
+re-run the exact same suite unchanged to additionally confirm that against
+real GPU hardware.
+
 ## Putting it together: training and generating from code
 
 Every stage that touches a model artifact now has a CLI (tokeniser -
@@ -830,13 +941,14 @@ place, and now genuinely does.
 
 ## Project status
 
-Every stage above (1 through 10, plus the optional `--optimised` backend)
-is built, tested, and runnable today — see [TASK.md](TASK.md) for the
-task-by-task history and [PLAN.md](PLAN.md)'s "Known limitations /
-deferred" section for the trade-offs (not bugs) that were deliberately made
-along the way. The one thing genuinely out of scope, not just "not done
-yet": GPU/distributed training — this project targets a single
-CPU-only machine throughout.
+Every stage above (1 through 11, including both optional `--optimised` and
+`--gpu` backends) is built, tested, and runnable today — see
+[TASK.md](TASK.md) for the task-by-task history and [PLAN.md](PLAN.md)'s
+"Known limitations / deferred" section for the trade-offs (not bugs) that
+were deliberately made along the way. Distributed (multi-machine) training
+remains out of scope for now - not planned or tasked, though revisitable if
+asked, the same way single-GPU execution (stage 11) just was; single-GPU
+execution is no longer out of scope the way it once was.
 
 The caveat that used to be repeated here — that the chat CLI doesn't
 apply stage 9's prompt template or know when a response has "finished" —
@@ -854,13 +966,29 @@ section's own headline finding: `File.ReadAllText` no longer holds an
 entire corpus file on the unreclaimable managed heap during tokeniser
 training/bulk-encoding (see the footprint section above for the
 re-measured numbers and what, honestly, still isn't perfectly flat and
-why). TASK-030 closed the last open gap: the SFT CLI's `--epochs` flag
-(default 3) sizes a training run from dataset size automatically - each
-epoch a freshly shuffled full pass - instead of requiring `--batch-size`
-hand-tuned to match the dataset the way the 6-example demo used to need;
-`--steps` remains as a lower-level, unshuffled escape hatch, mutually
-exclusive with `--epochs`.
+why). TASK-030 closed the SFT CLI scaling gap: `--epochs` (default 3)
+sizes a training run from dataset size automatically - each epoch a
+freshly shuffled full pass - instead of requiring `--batch-size` hand-tuned
+to match the dataset the way the 6-example demo used to need; `--steps`
+remains as a lower-level, unshuffled escape hatch, mutually exclusive with
+`--epochs`.
 
-No open gaps remain from this line of follow-up work - see TASK.md for the
-full task-by-task history if scaling to a genuinely large corpus/dataset
-(hundreds of MB, thousands of examples) raises something new.
+TASK-031/032/033 added stage 11's optional GPU backend (ILGPU) - working
+and tested, but with an honest, machine-specific caveat worth repeating
+here rather than only in stage 11: **this project's own development
+machine cannot currently demonstrate real GPU execution**, despite having
+a discrete AMD GPU. The OpenCL ICD registration is present but the actual
+native driver library is missing in this environment, so `--gpu` only ever
+finds ILGPU's own CPU accelerator here (confirmed directly, not assumed -
+see stage 11). Everything about the mechanism is real and correctly
+implemented and tested - the kernel, the accelerator-selection/preflight
+logic, the CLI wiring, the honest "GPU was slower than CPU at this toy
+scale" wall-clock finding - only the specific claim "this ran on a real
+GPU" isn't true *on this machine as currently configured*. Anyone running
+this on a machine with a working CUDA or OpenCL driver gets real GPU
+execution with no code changes.
+
+No open gaps remain from this line of follow-up work beyond the driver
+caveat above - see TASK.md for the full task-by-task history if scaling to
+a genuinely large corpus/dataset (hundreds of MB, thousands of examples)
+raises something new.
