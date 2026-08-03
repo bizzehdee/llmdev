@@ -114,6 +114,20 @@ rather than assuming it fits in RAM:
    make the model behave like an instruction-following assistant unless the
    corpus it was trained on was itself shaped like dialogue. Worth being
    upfront about in the CLI's own `--help`/README text, not just here.
+
+   **Follow-up, flagged at the user's request while auditing the README
+   lesson plan (TASK-023) once instruction tuning (TASK-016) existed:**
+   even fine-tuned via TASK-016, the chat CLI still doesn't apply the SFT
+   prompt template per turn, has no notion of a response "finishing" (it
+   free-runs to `--max-new-tokens` regardless), and doesn't reformat
+   multi-turn history with role markers the way training data was
+   shaped - so a fine-tuned checkpoint still doesn't behave as well
+   through this CLI as it could. → TASK-027. Separately, the chat CLI has
+   no way to control how much context a conversation uses short of the
+   model's own fixed `MaxSequenceLength` → TASK-028. Both are CLI/runtime
+   improvements only - the user/learner is still expected to supply their
+   own pretraining corpus and SFT dataset beyond `examples/sft-example.jsonl`,
+   same as every other stage.
 9. **Optional optimised math backend (`--optimised`)** — an opt-in fast
    path for `Tensor`'s hot ops (matmul above all; possibly elementwise ops
    too) backed by Math.NET Numerics and/or `System.Numerics.Tensors`,

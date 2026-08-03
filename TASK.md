@@ -809,6 +809,64 @@ currently library-only, runnable only by pasting a C# snippet.
   held.
   Depends on: TASK-016, TASK-025
 
+## Chat CLI improvements
+Added at the user's request: even with TASK-016's instruction tuning and
+TASK-026's SFT CLI, the chat CLI (TASK-014) still only approximates a real
+instruction-tuned assistant experience - these two tasks close that gap at
+the CLI/runtime level. Neither expands what data ships with the project:
+the user/learner is still expected to supply their own pretraining corpus
+and SFT dataset beyond the minimal `examples/sft-example.jsonl` starter, the
+same as every other stage.
+
+- [ ] TASK-027: Instruction-tuned conversational mode for the chat CLI -
+  today, `ChatCli` just appends each raw line of user input and each raw
+  block of generated output to one growing token sequence, with no
+  awareness that a fine-tuned model (TASK-016) actually expects
+  `SftDataset`'s prompt template. Needs, opt-in (e.g. `--instruction-tuned`
+  or similar, off by default so the existing raw-continuation behaviour -
+  useful for a purely-pretrained checkpoint - isn't disturbed):
+  - **Per-turn template wrapping.** Wrap each line of user input in the
+    same template `SftDataset.Tokenize` uses (`"### Instruction:\n{0}\n\n### Response:\n"`)
+    before encoding it, rather than encoding the bare line - reuse the
+    template constant/logic from `SftDataset` rather than duplicating it
+    (extract it to a small shared location if `SftDataset` doesn't already
+    expose it in a reusable form).
+  - **A stop condition.** Right now generation always runs to
+    `--max-new-tokens` regardless of content. Needs a stop sequence (e.g.
+    stop once generated text contains the next `"### Instruction:"` marker,
+    trimming it back out of what's printed/kept as context) so a response
+    doesn't run on into a hallucinated *next* user turn. `Generation.TextGenerator`/
+    `TokenSampler` have no stop-sequence concept today - this is new
+    surface area, not a flag on existing code.
+  - **Template-consistent multi-turn history.** Each *prior* turn in the
+    growing context should be shaped like the template too (its own
+    `### Instruction:`/`### Response:` markers), not just the newest one -
+    otherwise only the first turn matches what the model was tuned on and
+    the conversation drifts out of distribution turn by turn.
+  Test by comparing token sequences built by the CLI's new template path
+  directly against what `SftDataset.Tokenize` would build for the same
+  turns - they must match structurally, not just "look plausible" - plus a
+  stop-sequence test proving generation actually halts at the boundary
+  instead of running to `--max-new-tokens`.
+  Depends on: TASK-014, TASK-016
+  Required by: TASK-028
+
+- [ ] TASK-028: Adjustable context window for the chat CLI - a CLI flag
+  (e.g. `--context-length <n>`) capping how many of the *most recent*
+  tokens a conversation keeps before the existing sliding-window
+  truncation (TASK-013/TASK-020) kicks in, independent of just waiting for
+  the model's own fixed `MaxSequenceLength` to be reached. Must not exceed
+  the loaded model's `MaxSequenceLength` (validate and reject a value
+  that's too large, don't silently clamp it). Useful for deliberately
+  exercising the sliding-window/KV-cache-rebuild path on a model with a
+  large max length without needing a conversation long enough to reach it
+  naturally, and for controlling response latency/resource use on a slower
+  machine without retraining. Test: a small `--context-length` truncates
+  sooner than the model's real max would, a value exceeding the model's
+  max is rejected with a clear error, and the default (no flag) behaves
+  exactly as today (the model's own `MaxSequenceLength`).
+  Depends on: TASK-014, TASK-020, TASK-027
+
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
   except TASK-015, which is an explicit, narrowly-scoped, opt-in exception.
