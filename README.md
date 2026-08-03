@@ -722,21 +722,3 @@ grow the checkpoint size and pretraining's baseline RAM; a much bigger
 corpus, with today's implementation, grows RAM too, not just disk - worth
 knowing before pointing this at a genuinely large corpus on a
 memory-constrained machine.
-
-## Project status
-
-Every stage above (1 through 10, plus the optional `--optimised` backend)
-is built, tested, and runnable today — see [TASK.md](TASK.md) for the
-task-by-task history and [PLAN.md](PLAN.md)'s "Known limitations /
-deferred" section for the trade-offs (not bugs) that were deliberately made
-along the way. The one thing genuinely out of scope, not just "not done
-yet": GPU/distributed training — this project targets a single
-CPU-only machine throughout.
-
-The one honest caveat worth repeating from stage 10: fine-tuning a model
-(stage 9) makes it more likely to behave like a useful conversational
-assistant, but the chat CLI doesn't automatically format what you type
-using stage 9's prompt template, and its one-line-per-turn input doesn't
-naturally reproduce a multi-line template either — for a fine-tuned model
-to behave as intended, prompts need to be shaped the way that template
-expects, which the interactive CLI only approximates, not guarantees.
