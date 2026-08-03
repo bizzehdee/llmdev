@@ -28,6 +28,17 @@ public sealed class GpuFloatBuffer : IFloatBuffer
 
     public int Length { get; }
 
+    /// <summary>
+    /// The underlying device view - TASK-035's escape hatch for an op
+    /// (currently just <c>MatMulGpu</c>) that wants to use this buffer's
+    /// data directly on the accelerator instead of copying it to a
+    /// transient device buffer first, when this buffer is already
+    /// resident there. Internal: nothing outside <c>Tensor</c>'s own
+    /// GPU-op implementations should reach into a buffer's raw device
+    /// storage.
+    /// </summary>
+    internal ArrayView1D<float, Stride1D.Dense> View => _data.View;
+
     public GpuFloatBuffer(int length)
     {
         Length = length;

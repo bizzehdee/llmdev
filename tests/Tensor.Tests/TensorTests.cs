@@ -632,8 +632,12 @@ public class TensorTests
         Assert.Same(heap, again);
     }
 
+    // TASK-035: matmul uses an already-resident operand's existing device
+    // view directly instead of re-uploading it - correctness must hold
+    // whichever operand (or both, or neither) is already GPU-resident.
+
     [Fact]
-    public void MatMul_GpuResidentOperand_FallsBackToScalarAndStaysCorrectUnderGpuBackend()
+    public void MatMul_OneOperandGpuResident_StaysCorrectUnderGpuBackend()
     {
         Tensor.Backend = TensorBackend.Gpu;
         try
@@ -642,6 +646,95 @@ public class TensorTests
             using var gpuResident = Tensor.FromValues([5, 6, 7, 8], [2, 2]).ToGpu();
 
             using var result = heap.MatMul(gpuResident);
+
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Fact]
+    public void MatMul_OtherOperandGpuResident_StaysCorrectUnderGpuBackend()
+    {
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            using var gpuResident = Tensor.FromValues([1, 2, 3, 4], [2, 2]).ToGpu();
+            using var heap = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+
+            using var result = gpuResident.MatMul(heap);
+
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Fact]
+    public void MatMul_BothOperandsGpuResident_StaysCorrectUnderGpuBackend()
+    {
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]).ToGpu();
+            using var b = Tensor.FromValues([5, 6, 7, 8], [2, 2]).ToGpu();
+
+            using var result = a.MatMul(b);
+
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Fact]
+    public void MatMul_SameGpuResidentOperandReusedAcrossManyCalls_StaysCorrectEveryTime()
+    {
+        // The actual point of TASK-035: a weight-like tensor kept resident
+        // once and reused across many matmul calls (as a real training
+        // loop would reuse a model's parameters every forward pass)
+        // mustn't be re-uploaded or otherwise corrupted by repeated use.
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            using var weight = Tensor.FromValues([1, 0, 0, 1], [2, 2]).ToGpu(); // identity
+            using var input1 = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+            using var input2 = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+
+            using var result1 = input1.MatMul(weight);
+            using var result2 = input2.MatMul(weight);
+            using var result3 = input1.MatMul(weight);
+
+            Assert.Equal(input1.ToArray(), result1.ToArray());
+            Assert.Equal(input2.ToArray(), result2.ToArray());
+            Assert.Equal(input1.ToArray(), result3.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Fact]
+    public void MatMul_DiskBackedOperandUnderGpuBackend_FallsBackToScalarAndStaysCorrect()
+    {
+        // Unlike a GPU-resident operand (now handled directly, above), a
+        // disk-backed one still can't be used by the GPU path - same
+        // TryGetSpan-declines gate as before this task.
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            using var heap = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+            using var disk = Tensor.ZerosOnDisk([2, 2], ScratchDirectory);
+            disk[0, 0] = 5; disk[0, 1] = 6; disk[1, 0] = 7; disk[1, 1] = 8;
+
+            using var result = heap.MatMul(disk);
 
             Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
         }

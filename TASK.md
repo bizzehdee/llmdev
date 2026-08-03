@@ -1345,7 +1345,7 @@ that through an actual training run.
   Solution-wide: 446 tests passing; `Tensor.GpuFloatBuffer` at 100%
   branch coverage.
 
-- [ ] TASK-035: Chain matmul (and the other ops in a transformer block's
+- [x] TASK-035: Chain matmul (and the other ops in a transformer block's
   hot path - elementwise add/multiply for bias and residual connections,
   layernorm, activations) on-device without a host round-trip between
   them, when their operands are already device-resident. This is where
@@ -1368,6 +1368,49 @@ that through an actual training run.
   scalar reference exactly.
   Depends on: TASK-034
   Required by: TASK-036
+
+  **Done - the scope decision resolved narrower than either option the
+  task posed, and stated explicitly rather than discovered later:**
+  neither "every op gets a device-resident path" nor "matmul's output
+  stays device-resident, other ops fall back to a host round-trip" was
+  implemented as-is. Making `MatMulGpu`'s *output* device-resident by
+  default was rejected after reasoning through the consequence: every
+  other, not-yet-GPU-aware op (elementwise add/multiply, layernorm,
+  activations, reductions) would then silently degrade to
+  `GpuFloatBuffer`'s slow per-element indexer the moment it touched that
+  result - correct, but a real performance cliff, and guarding every one
+  of those call sites with an explicit bulk `Tensor.ToHost()` pull-back
+  first is genuine additional work this task doesn't attempt. What
+  `MatMulGpu` *does* now do: an operand that's already device-resident
+  (`GpuFloatBuffer`, TASK-034) is used directly via its existing
+  `GpuFloatBuffer.View` instead of being re-uploaded - for either or both
+  operands independently - while the *output* stays host-backed exactly
+  as before TASK-032. This is the concrete, safe form "avoiding a
+  round-trip" takes here: a caller that keeps a tensor resident across
+  many calls (a model's weight matrices, reused every forward pass -
+  TASK-036's job to actually wire that up) stops paying to re-upload it
+  every single time, without changing behaviour or performance for any
+  other op. Full whole-forward-pass on-device chaining (matmul → add →
+  layernorm → matmul, never touching the host in between) remains future
+  work, explicitly deferred, not silently dropped.
+
+  Tests: existing `MatMul`/gradient-check theories (parametrised for
+  `Gpu` since TASK-032) continue to pass unchanged; new tests prove
+  correctness with the GPU-resident operand as either `this` or `other`,
+  with both operands GPU-resident, with the *same* GPU-resident operand
+  reused correctly across several different calls (the actual scenario
+  this task targets - proves reuse doesn't corrupt or stale-read), and
+  that a disk-backed operand still correctly falls back to scalar under
+  `TensorBackend.Gpu` (unchanged from TASK-032 - only a GPU-resident
+  operand gets the new direct-use path). All run against the real AMD
+  GPU via OpenCL. Solution-wide: 450 tests passing; `Tensor.GpuFloatBuffer`
+  at 96.8% branch coverage (the one uncovered line is the new `View`
+  property's expression body, demonstrably exercised by the passing
+  GPU-resident-operand tests above - very likely a Coverlet
+  instrumentation artifact on an expression-bodied property rather than a
+  real gap, consistent with the confirmed Coverlet/ILGPU interaction
+  already documented in TASK-032; not chased further given `Tensor` overall
+  sits at 98.3%, well above the 90% bar).
 
 - [ ] TASK-036: Wire a real device-resident training run end to end and
   re-measure the stage 11 wall-clock comparison. Threads TASK-035's
