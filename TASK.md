@@ -1311,7 +1311,7 @@ that through an actual training run.
   (falling back to scalar) since this task doesn't teach them about it
   yet - that's TASK-035.
   Depends on: TASK-031
-  Required by: TASK-035
+  Required by: TASK-035, TASK-038
 
   **Done:** new `Tensor.GpuFloatBuffer`, an `IFloatBuffer` backed by an
   ILGPU `MemoryBuffer1D<float, Stride1D.Dense>`, allocated via
@@ -1367,7 +1367,7 @@ that through an actual training run.
   *chain* of on-device ops (not just one op in isolation) matches the
   scalar reference exactly.
   Depends on: TASK-034
-  Required by: TASK-036
+  Required by: TASK-036, TASK-037
 
   **Done - the scope decision resolved narrower than either option the
   task posed, and stated explicitly rather than discovered later:**
@@ -1434,6 +1434,7 @@ that through an actual training run.
   chaining still doesn't beat the CPU paths at this project's toy scale,
   that's as reportable a finding as a genuine speedup would be.
   Depends on: TASK-035, TASK-033
+  Required by: TASK-039
 
   **Done - resolved the open design question toward the smaller option,
   and the measured result is exactly the kind of finding this task
@@ -1476,6 +1477,85 @@ that through an actual training run.
   this path is - correctness only, not a speed claim. Solution-wide: 458
   tests passing; `Pretrain.PretrainCli` at 97.7%, `Tensor.Tensor` at 97.9%
   branch coverage.
+
+## Closing the device-resident weights gap
+
+TASK-036 measured `--gpu-resident-weights` as ≈37× slower, not faster,
+because keeping a weight resident only helps the one op TASK-035 taught
+about it (matmul) - every other op it touches every step (backward's
+`Transpose`, the optimizer's update) falls back to `GpuFloatBuffer`'s
+correct-but-slow per-element indexer instead of a bulk transfer or an
+on-device kernel. Requested as a genuine follow-up, not left as a
+permanent documented limitation: give those specific ops their own
+device-resident code paths, the same way TASK-032 gave matmul one, then
+re-measure honestly - prepared to report "still not a win" again if a
+real measurement says so.
+
+- [ ] TASK-037: Device-resident `Transpose` for the last two dimensions -
+  the single biggest known contributor to TASK-036's slowdown, since
+  `Variable.MatMul`'s backward calls `Value.Transpose(Shape.Length - 2,
+  Shape.Length - 1)` on every weight, every step (see `Variable.MatMul.cs`).
+  Scope deliberately narrower than `Tensor.Transpose`'s general
+  arbitrary-dim-pair signature - mirroring `MatMulKernel`'s own "only the
+  shape actually used" scoping (TASK-032): a kernel (or a dedicated method)
+  that swaps only the last two dimensions of a device-resident tensor,
+  producing a device-resident result, without a host round-trip. Decide
+  during implementation, don't assume: does this live as a new overload of
+  `Transpose` that dispatches on `Backend`/residency (mirroring `MatMul`'s
+  own `Backend`-driven dispatch to `MatMulScalar`/`MatMulOptimised`/
+  `MatMulGpu`), or a separate device-only method `Variable.MatMul`'s
+  backward calls explicitly when its operand is already resident? The
+  general N-dimension `Transpose` (arbitrary `dim0`/`dim1`, any backend)
+  stays exactly as it is for every other caller - this task doesn't touch
+  it. Correctness bar unchanged: the same test suite (transpose-specific
+  tests plus every `MatMul` gradient check, since backward is the actual
+  consumer) must pass, now also proving a resident input produces a
+  resident, correct output without a host round-trip for the two-dimension
+  case this task covers.
+  Depends on: TASK-035
+  Required by: TASK-039
+
+- [ ] TASK-038: Device-resident elementwise ops - `Add`/`Subtract`/
+  `Multiply`/`Divide` (broadcasting-aware, mirroring `ElementwiseBinary`'s
+  existing semantics exactly) and the unary ops `AdamWOptimizer`'s update
+  actually uses (`Scale`, `Sqrt`) - a broadcasting-aware kernel (or set of
+  kernels) operating on device-resident operands without a host
+  round-trip, alongside the existing scalar implementation (which stays
+  the default, always-correct reference, unchanged). Needed both for a
+  transformer block's own bias/residual adds and activations, and for
+  `AdamWOptimizer.Step`'s moment-estimate arithmetic once moments
+  themselves are considered for residency (see TASK-039 - not assumed
+  here whether moments actually need to move, only that the ops must be
+  able to handle it if they do). Open design question, not pre-decided:
+  does every elementwise op get a device-resident path, or only the
+  specific ones the optimizer's update and a transformer block's forward
+  pass actually call (narrower, mirroring every prior scoping decision in
+  this line of work - `Negate`/`Log`/`Relu`/`ReluMask` etc. may not need
+  one if nothing on the resident-weights path calls them)? Resolve before
+  implementation starts, and state the choice explicitly in the Done note,
+  not discover it as a gap later. Correctness bar: the same test suite
+  (including broadcasting edge cases already covered for the scalar path)
+  must pass against a device-resident operand too.
+  Depends on: TASK-034
+  Required by: TASK-039
+
+- [ ] TASK-039: Re-wire `--gpu-resident-weights` to use TASK-037/038's
+  on-device ops instead of falling back to the slow indexer, decide
+  whether `AdamWOptimizer`'s per-parameter moment estimates should also
+  become device-resident (open question: keeping moments resident too
+  might matter, since `Step()` reads and rewrites them every step
+  alongside the parameter itself - or it might not, if the parameter
+  update itself is now cheap enough that the moments' own host round-trip
+  stops mattering; decide from a real measurement, not a guess), and
+  re-measure the exact same wall-clock comparison TASK-036 ran (same tiny
+  model, same corpus). Update README.md's stage 11/Project status
+  sections and PLAN.md's stage 11 follow-up note with the new numbers,
+  stated as plainly as TASK-036's ≈37×-slower finding was - if this still
+  doesn't beat the plain `--gpu` path (or beat it only above some model
+  size this project's toy demos don't reach), that is exactly as
+  reportable a result as a genuine speedup, and must not be smoothed over
+  in favour of a flattering headline.
+  Depends on: TASK-037, TASK-038, TASK-036
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

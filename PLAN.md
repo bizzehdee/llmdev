@@ -340,6 +340,20 @@ rather than assuming it fits in RAM:
     which remains open future work if ever revisited, not currently
     planned.
 
+    **Now being revisited, at the user's request, as TASK-037/038/039:**
+    close the gap TASK-036 measured rather than leave it as a documented
+    limitation - give `Transpose` (the single biggest contributor, since
+    `MatMul`'s backward calls it on every weight every step), the
+    elementwise ops (`Add`/`Subtract`/`Multiply`/`Divide`/the unary
+    activations), and `AdamWOptimizer`'s per-parameter update their own
+    device-resident kernels, the same way TASK-032 gave matmul one. Only
+    once all three exist does `--gpu-resident-weights` have a real chance
+    of being a genuine win instead of the ≈37× regression measured today -
+    TASK-039 re-measures honestly once the pieces are in place, prepared
+    to report "still not a win, and here's why" again if that's what a
+    real measurement shows, not committed in advance to a flattering
+    number.
+
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage
 (mirroring the numbered list above), each covering what problem that stage
