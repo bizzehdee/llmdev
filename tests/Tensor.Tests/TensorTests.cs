@@ -283,6 +283,88 @@ public class TensorTests
         Assert.Throws<InvalidOperationException>(() => a.MatMul(b));
     }
 
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_ManyRows_UsesParallelPathAndMatchesReferenceImplementation(TensorBackend backend)
+    {
+        // TASK-021: 100 output rows clears MinRowsForParallelMatMul, so this
+        // exercises the Parallel.For path (below the threshold, the earlier
+        // MatMul tests already cover the sequential path). Verified against
+        // an independent reference implementation, not just "doesn't crash."
+        Tensor.Backend = backend;
+        try
+        {
+            const int m = 100, k = 8, n = 5;
+            var rng = new Random(42);
+            var aValues = new float[m * k];
+            var bValues = new float[k * n];
+            for (int i = 0; i < aValues.Length; i++) aValues[i] = (float)(rng.NextDouble() * 2 - 1);
+            for (int i = 0; i < bValues.Length; i++) bValues[i] = (float)(rng.NextDouble() * 2 - 1);
+
+            using var a = Tensor.FromValues(aValues, [m, k]);
+            using var b = Tensor.FromValues(bValues, [k, n]);
+
+            using var result = a.MatMul(b);
+
+            var expected = new float[m * n];
+            for (int i = 0; i < m; i++)
+            {
+                for (int j = 0; j < n; j++)
+                {
+                    float sum = 0f;
+                    for (int p = 0; p < k; p++)
+                    {
+                        sum += aValues[i * k + p] * bValues[p * n + j];
+                    }
+                    expected[i * n + j] = sum;
+                }
+            }
+
+            var actual = result.ToArray();
+            for (int i = 0; i < expected.Length; i++)
+            {
+                Assert.Equal(expected[i], actual[i], precision: 3);
+            }
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_ManyRows_IsDeterministicAcrossRepeatedCalls(TensorBackend backend)
+    {
+        // Parallelising independent output rows must not make the result
+        // depend on scheduling: repeated calls with the same inputs must
+        // produce bit-identical output.
+        Tensor.Backend = backend;
+        try
+        {
+            const int m = 200, k = 6, n = 4;
+            var rng = new Random(7);
+            var aValues = new float[m * k];
+            var bValues = new float[k * n];
+            for (int i = 0; i < aValues.Length; i++) aValues[i] = (float)(rng.NextDouble() * 2 - 1);
+            for (int i = 0; i < bValues.Length; i++) bValues[i] = (float)(rng.NextDouble() * 2 - 1);
+
+            using var a = Tensor.FromValues(aValues, [m, k]);
+            using var b = Tensor.FromValues(bValues, [k, n]);
+
+            using var first = a.MatMul(b);
+            using var second = a.MatMul(b);
+
+            Assert.Equal(first.ToArray(), second.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
     [Fact]
     public void Transpose_TwoDimensional_SwapsRowsAndColumns()
     {

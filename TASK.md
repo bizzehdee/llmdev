@@ -465,7 +465,7 @@ end rather than re-numbered into size order).
   comparing the two paths directly, not only by inspecting generated text.
   Depends on: TASK-007, TASK-008, TASK-009, TASK-013
 
-- [ ] TASK-021: CPU parallelism for `Tensor`'s hot ops - unlike TASK-015,
+- [x] TASK-021: CPU parallelism for `Tensor`'s hot ops - unlike TASK-015,
   this doesn't touch the "no libraries" question at all: .NET's Task
   Parallel Library (`Parallel.For`/`Parallel.ForEach`, `System.Threading.Tasks`)
   is BCL, not a new dependency, and the algorithm doesn't change - only how
@@ -491,6 +491,32 @@ end rather than re-numbered into size order).
   (results must match, not just "look about right") plus a manual/
   benchmark wall-clock comparison - performance shouldn't be asserted in
   the automated suite, environments vary too much for that to be reliable.
+  Done: `Tensor.MatMul.cs`'s scalar and optimised paths both now spread
+  independent output rows (a flattened batch*m index space, decomposed
+  per row via a new pure `UnravelIndex` rather than the old
+  incrementally-mutated `batchIdx` odometer, since parallel access needs
+  a batch's coordinates computable directly from its flat index) across
+  `Parallel.For` via a shared `ForEachRow` helper, once there are at
+  least `MinRowsForParallelMatMul` (64) of them - below that, a plain
+  sequential loop, since thread-scheduling overhead would dominate for
+  e.g. the `[1]`-shaped scalar tensors used throughout this codebase for
+  constants. The inner k-length reduction stays strictly sequential in
+  both paths, preserving determinism (each row's output depends only on
+  its own accumulation order, never on how many threads or what order
+  ran). `MatMulOptimised` re-derives its `Span<float>`s from
+  `IFloatBuffer.TryGetSpan` *inside* each row's closure rather than
+  capturing them from the caller - `Span<T>` is a ref struct and can't be
+  captured into a `Parallel.For` delegate, so this was a required change,
+  not just a style choice; re-deriving is a cheap view over the same
+  underlying array/pointer, not a copy. Elementwise ops left sequential
+  (their O(n) cost is far smaller, as the task itself already flagged as
+  lower priority). Verified via the existing MatMul test suite (all
+  passing unchanged) plus two new tests at 100+/200+ rows (above the
+  threshold): output matches an independent reference implementation,
+  and repeated calls with the same input produce bit-identical results
+  (proving the parallel path doesn't introduce nondeterminism). No
+  automated performance assertion, per the task's own guidance - wall
+  clock varies too much across environments to be a reliable test.
   Depends on: TASK-003
 
 - [ ] TASK-022: Modern regex-based pre-tokenisation for the BPE tokeniser -
