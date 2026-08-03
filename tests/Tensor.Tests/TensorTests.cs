@@ -1168,6 +1168,94 @@ public class TensorTests
         Assert.Equal(new float[] { 2.5f, 5f, 7.5f }, result.ToArray());
     }
 
+    // TASK-038: device-resident elementwise ops - Add/Subtract/Multiply/
+    // Divide (same-shape only) and Scale/Sqrt use the GPU kernel path when
+    // GPU-resident, matching the general scalar path's result exactly.
+
+    [Theory]
+    [InlineData("Add", 3f, 4f, 7f)]
+    [InlineData("Subtract", 10f, 4f, 6f)]
+    [InlineData("Multiply", 3f, 4f, 12f)]
+    [InlineData("Divide", 12f, 4f, 3f)]
+    public void ElementwiseBinary_BothOperandsGpuResident_SameShape_MatchesScalarResult(string op, float a, float b, float expected)
+    {
+        using var gpuA = Tensor.FromValues([a, a], [2]).ToGpu();
+        using var gpuB = Tensor.FromValues([b, b], [2]).ToGpu();
+
+        using var result = op switch
+        {
+            "Add" => gpuA.Add(gpuB),
+            "Subtract" => gpuA.Subtract(gpuB),
+            "Multiply" => gpuA.Multiply(gpuB),
+            "Divide" => gpuA.Divide(gpuB),
+            _ => throw new ArgumentOutOfRangeException(nameof(op)),
+        };
+
+        Assert.True(result.IsGpuResident);
+        Assert.Equal(new[] { expected, expected }, result.ToArray());
+    }
+
+    [Fact]
+    public void Add_OnlyOneOperandGpuResident_FallsBackToScalarAndStaysCorrect()
+    {
+        using var gpuA = Tensor.FromValues([1, 2, 3], [3]).ToGpu();
+        using var heapB = Tensor.FromValues([10, 20, 30], [3]);
+
+        using var result = gpuA.Add(heapB);
+
+        Assert.False(result.IsGpuResident);
+        Assert.Equal(new float[] { 11, 22, 33 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Add_BothOperandsGpuResidentButDifferentShapes_FallsBackToScalarBroadcastAndStaysCorrect()
+    {
+        // The narrower, same-shape-only GPU path must decline a genuine
+        // broadcast (e.g. AdamWOptimizer's "+ epsilonTensor" shape [1])
+        // and still produce the correct broadcast result via the general
+        // scalar path.
+        using var gpuMatrix = Tensor.FromValues([1, 2, 3, 4], [2, 2]).ToGpu();
+        using var gpuScalar = Tensor.FromValues([10], [1]).ToGpu();
+
+        using var result = gpuMatrix.Add(gpuScalar);
+
+        Assert.False(result.IsGpuResident);
+        Assert.Equal(new float[] { 11, 12, 13, 14 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Scale_GpuResidentTensor_MatchesScalarResultAndStaysResident()
+    {
+        using var gpu = Tensor.FromValues([1, 2, 3], [3]).ToGpu();
+
+        using var result = gpu.Scale(2.5f);
+
+        Assert.True(result.IsGpuResident);
+        Assert.Equal(new float[] { 2.5f, 5f, 7.5f }, result.ToArray());
+    }
+
+    [Fact]
+    public void Sqrt_GpuResidentTensor_MatchesScalarResultAndStaysResident()
+    {
+        using var gpu = Tensor.FromValues([4, 9, 16], [3]).ToGpu();
+
+        using var result = gpu.Sqrt();
+
+        Assert.True(result.IsGpuResident);
+        Assert.Equal(new float[] { 2, 3, 4 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Sqrt_HeapBackedTensor_StillUsesScalarPath()
+    {
+        using var heap = Tensor.FromValues([4, 9, 16], [3]);
+
+        using var result = heap.Sqrt();
+
+        Assert.False(result.IsGpuResident);
+        Assert.Equal(new float[] { 2, 3, 4 }, result.ToArray());
+    }
+
     [Fact]
     public void SubtractInPlace_MutatesBufferDirectly()
     {

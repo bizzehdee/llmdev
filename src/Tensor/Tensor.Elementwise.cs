@@ -2,10 +2,37 @@ namespace Tensor;
 
 public sealed partial class Tensor
 {
-    public Tensor Add(Tensor other) => ElementwiseBinary(other, static (a, b) => a + b);
-    public Tensor Subtract(Tensor other) => ElementwiseBinary(other, static (a, b) => a - b);
-    public Tensor Multiply(Tensor other) => ElementwiseBinary(other, static (a, b) => a * b);
-    public Tensor Divide(Tensor other) => ElementwiseBinary(other, static (a, b) => a / b);
+    /// <summary>
+    /// TASK-038: an elementwise binary op uses the device-resident kernel
+    /// path (<see cref="ElementwiseBinaryGpu"/>) when both operands are
+    /// already <see cref="GpuFloatBuffer"/>-backed *and* their shapes
+    /// match exactly - deliberately narrower than the scalar path's full
+    /// broadcasting support (e.g. the `+ epsilonTensor` broadcast
+    /// `AdamWOptimizer.Step` does isn't covered), since every real
+    /// consumer this line of work targets (the optimizer's per-parameter
+    /// update, a transformer block's bias/residual adds) operates on
+    /// exactly-matching shapes - any actual broadcast falls back to the
+    /// general scalar implementation, correctly, just without the
+    /// device-resident speedup for that call. Not <see cref="Backend"/>-gated,
+    /// the same reasoning as <see cref="Transpose"/> (TASK-037): there's
+    /// no competing implementation to prefer, only "does an efficient path
+    /// exist for this operand," so it applies regardless of whatever
+    /// backend happens to be selected for unrelated ops.
+    /// </summary>
+    public Tensor Add(Tensor other) => ElementwiseBinaryDispatch(other, ElementwiseOp.Add, static (a, b) => a + b);
+    public Tensor Subtract(Tensor other) => ElementwiseBinaryDispatch(other, ElementwiseOp.Subtract, static (a, b) => a - b);
+    public Tensor Multiply(Tensor other) => ElementwiseBinaryDispatch(other, ElementwiseOp.Multiply, static (a, b) => a * b);
+    public Tensor Divide(Tensor other) => ElementwiseBinaryDispatch(other, ElementwiseOp.Divide, static (a, b) => a / b);
+
+    private Tensor ElementwiseBinaryDispatch(Tensor other, ElementwiseOp opCode, Func<float, float, float> scalarOp)
+    {
+        if (_buffer is GpuFloatBuffer && other._buffer is GpuFloatBuffer && Shape.SequenceEqual(other.Shape))
+        {
+            return ElementwiseBinaryGpu(other, opCode);
+        }
+
+        return ElementwiseBinary(other, scalarOp);
+    }
 
     private Tensor ElementwiseBinary(Tensor other, Func<float, float, float> op)
     {

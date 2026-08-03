@@ -1544,7 +1544,7 @@ real measurement says so.
   `Tensor.GpuFloatBuffer` back to 100%, `Tensor.Tensor` at 98% branch
   coverage.
 
-- [ ] TASK-038: Device-resident elementwise ops - `Add`/`Subtract`/
+- [x] TASK-038: Device-resident elementwise ops - `Add`/`Subtract`/
   `Multiply`/`Divide` (broadcasting-aware, mirroring `ElementwiseBinary`'s
   existing semantics exactly) and the unary ops `AdamWOptimizer`'s update
   actually uses (`Scale`, `Sqrt`) - a broadcasting-aware kernel (or set of
@@ -1567,6 +1567,43 @@ real measurement says so.
   must pass against a device-resident operand too.
   Depends on: TASK-034
   Required by: TASK-039
+
+  **Done - resolved the design question toward the narrower option,
+  stated explicitly, not discovered later:** only `Add`/`Subtract`/
+  `Multiply`/`Divide` and `Scale`/`Sqrt` gained device-resident paths -
+  exactly the ops `AdamWOptimizer.Step` and (via `Variable.MatMul`'s
+  backward, now TASK-037-aware too) the resident-weights path actually
+  call. `Negate`/`Exp`/`Log`/`Relu`/`ReluMask` were deliberately left on
+  the general scalar path - nothing on the resident-weights path calls
+  them, so a device kernel for them would be speculative, not needed.
+  Also narrower than the task's own "broadcasting-aware" framing: the
+  binary-op GPU path only handles *exactly matching shapes* - a real
+  broadcast (e.g. `AdamWOptimizer`'s `.Add(epsilonTensor)`, shape `[1]`
+  against a full parameter shape) falls back to the general
+  broadcasting-aware scalar implementation, correctly, just without the
+  device-resident speedup for that specific call; every real consumer
+  this line of work targets operates on exactly-matching shapes anyway.
+  A single `ElementwiseBinaryKernel` handles all four binary ops via an
+  `ElementwiseOp` int opcode and a device-side `switch` (a kernel can't
+  invoke an arbitrary host delegate the way `ElementwiseBinary`'s generic
+  `Func<float,float,float>` parameter does) - one kernel, not four
+  near-duplicates. `Scale`/`Sqrt` got their own dedicated kernels
+  (`ScaleKernel`/`SqrtKernel`) since a unary op takes no second operand to
+  opcode-switch on. Confirmed via direct probing that `MathF.Sqrt` compiles
+  and runs correctly inside an ILGPU kernel on the real GPU, without
+  needing the separate `ILGPU.Algorithms` package. None of this is
+  `Backend`-gated (same reasoning as TASK-037's `Transpose`): a resident
+  operand always gets the efficient path when the shapes/op qualify,
+  regardless of the currently selected `Backend`.
+  Tests: each binary op (`Add`/`Subtract`/`Multiply`/`Divide`) proven
+  correct with both operands GPU-resident and matching shapes; one
+  operand resident (falls back to scalar, stays correct); both resident
+  but *different* shapes - the real broadcast case - falls back to the
+  general scalar broadcasting path, stays correct; `Scale`/`Sqrt` proven
+  correct and resident-producing when the source is resident, and
+  unchanged (non-resident output) when it isn't. All run against the real
+  AMD GPU via OpenCL. Solution-wide: 475 tests passing; `Tensor.Tensor` at
+  98.2% branch coverage.
 
 - [ ] TASK-039: Re-wire `--gpu-resident-weights` to use TASK-037/038's
   on-device ops instead of falling back to the slow indexer, decide
