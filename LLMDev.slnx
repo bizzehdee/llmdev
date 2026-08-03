@@ -5,6 +5,7 @@
     <Project Path="src/Generation/Generation.csproj" />
     <Project Path="src/Model/Model.csproj" />
     <Project Path="src/Pretrain/Pretrain.csproj" />
+    <Project Path="src/Sft/Sft.csproj" />
     <Project Path="src/Tensor/Tensor.csproj" />
     <Project Path="src/Tokeniser/Tokeniser.csproj" />
     <Project Path="src/Training/Training.csproj" />
@@ -15,6 +16,7 @@
     <Project Path="tests/Generation.Tests/Generation.Tests.csproj" />
     <Project Path="tests/Model.Tests/Model.Tests.csproj" />
     <Project Path="tests/Pretrain.Tests/Pretrain.Tests.csproj" />
+    <Project Path="tests/Sft.Tests/Sft.Tests.csproj" />
     <Project Path="tests/Tensor.Tests/Tensor.Tests.csproj" />
     <Project Path="tests/Tokeniser.Tests/Tokeniser.Tests.csproj" />
     <Project Path="tests/Training.Tests/Training.Tests.csproj" />

@@ -771,7 +771,7 @@ currently library-only, runnable only by pasting a C# snippet.
   Depends on: TASK-001, TASK-012, TASK-015, TASK-018
   Required by: TASK-026
 
-- [ ] TASK-026: Instruction-tuning (SFT) CLI - a new console entry point
+- [x] TASK-026: Instruction-tuning (SFT) CLI - a new console entry point
   (same `Run(args, stdout, stderr)`-testable shape as TASK-025) that runs
   TASK-016's `SftTrainer` end to end: `ModelCheckpoint.Load` a *pretrained*
   checkpoint (produced by TASK-025's CLI, or the README's worked example),
@@ -792,6 +792,21 @@ currently library-only, runnable only by pasting a C# snippet.
   Once done, update README.md's stage 10 section the same way TASK-025
   updates stage 6's: document the real command instead of only a
   C#-snippet sketch.
+  Done: `src/Sft/SftCli.cs` (+ `Program.cs`, same `Run(args, stdout,
+  stderr)`-testable split as `PretrainCli`/`ChatCli`). Refuses to run if
+  `<output-checkpoint-path>` resolves (via `Path.GetFullPath`) to the same
+  file as `<base-checkpoint-path>`, before loading anything - the base
+  pretrained checkpoint is never at risk of being overwritten. Defaults
+  `--learning-rate` to `3e-5` - a tenth of `PretrainCli`'s `3e-4` default,
+  per TASK-016's own guidance, not the same flag value reused unchanged.
+  Tested: usage/argument-error paths, the output/base-path-equality
+  refusal, missing checkpoint/vocab/dataset files, a malformed dataset
+  line, an empty dataset, `--optimised` actually selecting
+  `TensorBackend.Optimised`, and a genuine end-to-end fine-tuning run
+  asserting loss printed to stdout dropped and the resulting checkpoint
+  loads back as a separate, correct file from the untouched base
+  checkpoint. `Sft` reached 100% branch coverage; solution-wide coverage
+  held.
   Depends on: TASK-016, TASK-025
 
 ## Notes

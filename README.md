@@ -371,15 +371,25 @@ adapting an existing public instruction-tuning dataset (mind licensing,
 and reformat to this project's template).
 
 **Source files:** `src/Training/{SftExample,SftDataset,SftTrainer}.cs`,
-`src/Training/CrossEntropyLoss.cs` (`ComputeMasked`).
+`src/Training/CrossEntropyLoss.cs` (`ComputeMasked`), `src/Sft/SftCli.cs`.
 
-**Run it:** there's no CLI for this stage either, for the same reason as
-stage 6 — it's driven from a short C# snippet analogous to the
-[worked example](#putting-it-together-training-and-generating-from-code)
-below, swapping `Trainer`/`TokenCorpus`/`BatchSampler` for
-`SftTrainer`/`SftDataset`.
+**Run it:**
 
 ```bash
+cd src/Sft
+dotnet run -- <base-checkpoint-path> <vocab-path> <dataset-path> <output-checkpoint-path>
+  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]
+```
+
+Loads a checkpoint produced by [stage 6's CLI](#stage-6--training-loop) (or
+the worked example below), fine-tunes it on a JSON Lines instruction/
+response dataset, and saves the result to `<output-checkpoint-path>` — which
+must differ from `<base-checkpoint-path>`; the CLI refuses to overwrite the
+base pretrained checkpoint. `--learning-rate` defaults to a tenth of stage
+6's pretraining default, per this stage's own guidance above.
+
+```bash
+cd tests/Sft.Tests && dotnet test
 cd tests/Training.Tests && dotnet test
 ```
 
@@ -388,13 +398,15 @@ instruction/response pattern, mirroring stage 6's pretraining equivalent.
 
 ## Putting it together: training and generating from code
 
-There's a CLI for the tokeniser (stage 1), pretraining (stage 6), and chat
-(stage 8) — instruction tuning (stage 10) is still library-only as of this
-writing. The example below walks through stages 2–7 (pretraining +
-generation) as a from-scratch C# snippet, for anyone who wants to see the
-pieces wired together directly rather than through the stage 6 CLI; stage
-10's fine-tuning loop looks the same shape, just with `SftDataset.Load` +
-`SftTrainer` in place of `TokenCorpus`/`BatchSampler` + `Trainer`.
+Every stage that touches a model artifact now has a CLI (tokeniser -
+stage 1, pretraining - stage 6, instruction tuning - stage 10, chat -
+stage 8). The example below walks through stages 2–7 (pretraining +
+generation) as a from-scratch C# snippet anyway, for anyone who wants to
+see the pieces wired together directly rather than through the stage 6
+CLI; stage 10's fine-tuning loop looks the same shape, just with
+`SftDataset.Load` + `SftTrainer` in place of `TokenCorpus`/`BatchSampler` +
+`Trainer` (or just use [its CLI](#stage-10--instruction-tuning-sft)
+directly on a checkpoint this example produced).
 
 ```csharp
 using Model;
@@ -490,6 +502,7 @@ dotnet run
   `Trainer` (the pretraining loop), and `SftExample`/`SftDataset`/`SftTrainer`
   (instruction tuning).
 - `src/Pretrain/` — the pretraining CLI (`PretrainCli.cs`/`Program.cs`).
+- `src/Sft/` — the instruction-tuning CLI (`SftCli.cs`/`Program.cs`).
 - `src/Generation/` — `SamplingOptions`, `TokenSampler`, and
   `TextGenerator` (KV-cached autoregressive generation).
 - `src/Chat/` — the interactive chat CLI.
