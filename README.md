@@ -666,6 +666,49 @@ dotnet run
 - `tests/*.Tests/` — one xUnit project per `src/` project above, mirroring
   its structure.
 
+## Memory and disk footprint: a worked example
+
+PLAN.md's standing "memory constraint" rule - disk-backed scratch structures
+in place of large heap allocations, since this project has genuinely
+OOM-killed itself before - isn't just a design aspiration. Here's what it
+looks like in practice, measured on this machine (`/usr/bin/time -v` for
+peak RAM, real byte counts for disk) against a small, real 2.0 MB text
+corpus - the same one this README's other examples use:
+
+| Step | Input | Disk (transient scratch, deleted after) | Disk (permanent output) | Peak RAM |
+|---|---|---|---|---|
+| Stage 1: tokeniser training | 2.0 MB text | ~32 MB (`BpeTokeniser.Train`'s scratch arrays) | `vocab.bpe`: 8 KB | ~216 MB |
+| Stage 6: pretraining | same corpus + vocab → 468,003 tokens | ~1.8 MB (`TokenCorpus`, 4 bytes/token) | `model.checkpoint`: 3.3 MB (a small 4-layer, 128-dim model) | ~217 MB |
+
+The tokeniser training scratch figure isn't an estimate for this table
+specifically - it's the exact number `TokeniserCli` itself prints before
+training starts (`EstimateScratchBytes`: 16 bytes of scratch per byte of
+input, from 4 `int32` arrays sized to the corpus - see stage 1 above), and
+it's what determines whether the CLI refuses to run for being too large for
+available disk space.
+
+**The point worth taking away isn't the absolute numbers** (this is a toy
+corpus and a toy model - real ones are bigger in both directions) **but
+that peak RAM barely moved between the two rows** (~216 MB → ~217 MB)
+*despite* the corpus turning into nearly half a million tokens along the
+way. At this small scale, that ~216 MB floor is mostly the .NET runtime
+itself (JIT, GC, framework overhead) rather than anything belonging to this
+project's data - but the trend is the real result: disk usage scales with
+*input size*, while RAM stays governed by *model size* (parameter count) and
+a roughly-fixed runtime floor, not by how much text or how many tokens you
+throw at it. Scale the input corpus up 10x and the disk-scratch/token-corpus
+figures scale with it (~320 MB, ~18 MB) - not the RAM.
+
+That trade only holds because of what's *not* on the heap: `BpeTokeniser.Train`'s
+occurrence-tracking arrays, `TokenCorpus`'s token stream, and (optionally,
+for a large enough model) `AdamWOptimizer`'s moment estimates are all
+`MappedArray<T>`-backed rather than plain arrays - see stage 2's storage
+abstraction and TASK-019 in [TASK.md](TASK.md). A model's own weights,
+gradients, and (by default) optimizer state are still heap-backed, which is
+why RAM tracks *model* size, not corpus size - a much bigger model (more
+layers/wider embeddings) would show up as a bigger number in the RAM
+column, not the disk ones.
+
 ## Project status
 
 Every stage above (1 through 10, plus the optional `--optimised` backend)
