@@ -92,6 +92,12 @@ rather than assuming it fits in RAM:
    output, next-token-prediction cross-entropy loss, an optimizer (SGD and
    AdamW), backprop via the autodiff engine, checkpointing. See
    `src/Training/`.
+
+   **CLI gap, flagged at the user's request while auditing the README
+   lesson plan (TASK-023) against what's actually runnable:** every other
+   stage that produces or consumes a model artifact has a CLI (tokeniser
+   training, chat), but pretraining a model from a corpus is library-only
+   - there's no command to run, only a C# snippet to paste. → TASK-025.
 7. **Generation (done)** — greedy, temperature, and top-k/top-p sampling to
    actually produce text from a trained model. See `src/Generation/`.
 8. **Interactive CLI ("chat")** — a console app that loads a saved
@@ -172,6 +178,10 @@ rather than assuming it fits in RAM:
 
     See TASK-016 for how these get resolved; this is deliberately left
     open here rather than pre-deciding an implementation.
+
+    **Same CLI gap as stage 6, flagged at the same time:** fine-tuning a
+    pretrained checkpoint on an SFT dataset is also library-only - no
+    command to run. → TASK-026.
 
     **Where the (instruction, response) pairs themselves come from is a
     data-sourcing question, not a code dependency** - separate from the

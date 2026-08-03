@@ -715,6 +715,63 @@ branch-coverage bar this task exists to reach.
   rather than over-engineering a seam for them.
   Depends on: none
 
+## CLI gaps
+Added at the user's request, while auditing the freshly-rewritten README
+lesson plan (TASK-023): every stage that produces or consumes a model
+artifact should have a CLI to actually do so, the same way the tokeniser
+(TASK-001) and chat (TASK-014) do - pretraining and instruction tuning are
+currently library-only, runnable only by pasting a C# snippet.
+
+- [ ] TASK-025: Pretraining CLI - a new console entry point (mirroring
+  `src/Tokeniser`'s `TokeniserCli`/`Program.cs` split, testable via
+  `Run(args, stdout, stderr)`) that runs TASK-012's `Trainer` end to end:
+  load a trained tokeniser vocab (`BpeTokeniser.Load`), bulk-encode one or
+  more corpus files into a `TokenCorpus` (TASK-018's `EncodeBulk`, not
+  `Encode` - this is exactly the large-corpus case that task exists for),
+  construct a fresh `GptModel` from CLI-supplied architecture flags
+  (embedding dim, layer/head count, context length), train it for a given
+  number of steps/batch size via `AdamWOptimizer/Trainer`, printing loss
+  periodically (mirror `Trainer.Run`'s `onStep` callback), and
+  `ModelCheckpoint.Save` the result to a CLI-supplied output path. Needs
+  sensible flags/defaults for every hyperparameter the worked README
+  example currently hardcodes (learning rate, embedding dim, layers,
+  heads, context length, steps, batch size, target vocab size if training
+  a tokeniser isn't assumed already done) plus a `--scratch-dir` the same
+  way the tokeniser CLI requires one (real disk, not `tmpfs`) and,
+  optionally, `--optimised` (TASK-015) to select the fast tensor backend
+  for the run. Test the same way `TokeniserCli`/`ChatCli` are tested: a
+  small fixture corpus, asserting the run completes and produces a loadable
+  checkpoint whose loss actually dropped - not just "didn't crash."
+  Once done, update README.md's stage 6 section to document the CLI (a
+  runnable command, mirroring how stages 1/8 are documented) instead of
+  only the current C#-snippet worked example - the lesson plan (TASK-023)
+  should show the real command, not just point at library code.
+  Depends on: TASK-001, TASK-012, TASK-015, TASK-018
+  Required by: TASK-026
+
+- [ ] TASK-026: Instruction-tuning (SFT) CLI - a new console entry point
+  (same `Run(args, stdout, stderr)`-testable shape as TASK-025) that runs
+  TASK-016's `SftTrainer` end to end: `ModelCheckpoint.Load` a *pretrained*
+  checkpoint (produced by TASK-025's CLI, or the README's worked example),
+  `BpeTokeniser.Load` its vocab, `SftDataset.Load` a JSON Lines
+  instruction/response file, fine-tune for a given number of
+  steps/batch size via `AdamWOptimizer/SftTrainer` (default learning rate
+  should be visibly smaller than TASK-025's pretraining default - a tenth
+  or less, per TASK-016's own guidance - not the same flag reused
+  unchanged), and `ModelCheckpoint.Save` the result to a CLI-supplied
+  *output* path that must differ from the input checkpoint path (refuse
+  to overwrite the base pretrained model - TASK-016 was explicit that the
+  base checkpoint is never overwritten, this CLI must not make that
+  mistake easy to make by accident). Test the same way as TASK-025: a
+  small fixture pretrained checkpoint + a small fixture SFT dataset,
+  asserting the run completes, refuses an output path equal to the input
+  path, and produces a loadable checkpoint whose masked loss actually
+  dropped.
+  Once done, update README.md's stage 10 section the same way TASK-025
+  updates stage 6's: document the real command instead of only a
+  C#-snippet sketch.
+  Depends on: TASK-016, TASK-025
+
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
   except TASK-015, which is an explicit, narrowly-scoped, opt-in exception.
