@@ -434,6 +434,96 @@ public class TensorTests
         Assert.Throws<ArgumentOutOfRangeException>(() => t.Transpose(0, 2));
     }
 
+    // TASK-037: device-resident Transpose for the last two dimensions -
+    // dispatched automatically whenever the operand is already
+    // GPU-resident and the swap is of the last two dims, with no change
+    // needed at any call site (Variable.MatMul's backward included).
+
+    [Fact]
+    public void Transpose_GpuResidentTensor_LastTwoDims_MatchesScalarResultExactly()
+    {
+        using var heap = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+        using var expected = heap.Transpose(0, 1);
+
+        using var gpu = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]).ToGpu();
+        using var result = gpu.Transpose(0, 1);
+
+        Assert.Equal(expected.Shape, result.Shape);
+        Assert.Equal(expected.ToArray(), result.ToArray());
+    }
+
+    [Fact]
+    public void Transpose_GpuResidentTensor_LastTwoDims_ProducesAGpuResidentResult()
+    {
+        using var gpu = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]).ToGpu();
+
+        using var result = gpu.Transpose(0, 1);
+
+        Assert.True(result.IsGpuResident);
+    }
+
+    [Fact]
+    public void Transpose_GpuResidentTensor_LastTwoDimsInReverseOrder_StillUsesTheDeviceResidentPath()
+    {
+        // Transpose(1, 0) is the same swap as Transpose(0, 1) for a 2D
+        // tensor - both orderings of the "last two dims" pair must be
+        // recognised, not just the (Length-2, Length-1) order.
+        using var heap = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+        using var expected = heap.Transpose(1, 0);
+
+        using var gpu = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]).ToGpu();
+        using var result = gpu.Transpose(1, 0);
+
+        Assert.True(result.IsGpuResident);
+        Assert.Equal(expected.ToArray(), result.ToArray());
+    }
+
+    [Fact]
+    public void Transpose_GpuResidentTensor_BatchedLastTwoDims_MatchesScalarResultExactly()
+    {
+        // A batch of two (2x3) matrices - proves the batch dimension is
+        // left alone and only the trailing two dims are swapped, the same
+        // shape MultiHeadAttention/MatMul backward actually produce.
+        using var heap = Tensor.FromValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]);
+        using var expected = heap.Transpose(1, 2);
+
+        using var gpu = Tensor.FromValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]).ToGpu();
+        using var result = gpu.Transpose(1, 2);
+
+        Assert.Equal(expected.Shape, result.Shape);
+        Assert.Equal(expected.ToArray(), result.ToArray());
+    }
+
+    [Fact]
+    public void Transpose_GpuResidentTensor_NotTheLastTwoDims_FallsBackToScalarAndStaysCorrect()
+    {
+        // A 3D+ tensor swapping dims 0 and 1 (not the trailing pair) isn't
+        // the shape TASK-037 covers - must still produce a correct result
+        // via the unchanged general scalar path, not just avoid crashing.
+        using var heap = Tensor.FromValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]);
+        using var expected = heap.Transpose(0, 1);
+
+        using var gpu = Tensor.FromValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]).ToGpu();
+        using var result = gpu.Transpose(0, 1);
+
+        Assert.False(result.IsGpuResident);
+        Assert.Equal(expected.Shape, result.Shape);
+        Assert.Equal(expected.ToArray(), result.ToArray());
+    }
+
+    [Fact]
+    public void Transpose_HeapBackedTensor_LastTwoDims_StillUsesScalarPath()
+    {
+        // A non-resident operand must never be routed to the GPU kernel,
+        // regardless of which dims are swapped.
+        using var heap = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+
+        using var result = heap.Transpose(0, 1);
+
+        Assert.False(result.IsGpuResident);
+        Assert.Equal(new float[] { 1, 4, 2, 5, 3, 6 }, result.ToArray());
+    }
+
     [Fact]
     public void Sum_AlongAxis_ReducesAndDropsDimensionByDefault()
     {

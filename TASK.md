@@ -1491,7 +1491,7 @@ device-resident code paths, the same way TASK-032 gave matmul one, then
 re-measure honestly - prepared to report "still not a win" again if a
 real measurement says so.
 
-- [ ] TASK-037: Device-resident `Transpose` for the last two dimensions -
+- [x] TASK-037: Device-resident `Transpose` for the last two dimensions -
   the single biggest known contributor to TASK-036's slowdown, since
   `Variable.MatMul`'s backward calls `Value.Transpose(Shape.Length - 2,
   Shape.Length - 1)` on every weight, every step (see `Variable.MatMul.cs`).
@@ -1514,6 +1514,35 @@ real measurement says so.
   case this task covers.
   Depends on: TASK-035
   Required by: TASK-039
+
+  **Done:** chose the dispatch-inside-`Transpose` option, not a separate
+  device-only method - `Tensor.Transpose(dim0, dim1)` itself now checks
+  whether the swap is of the last two dimensions (in either order) *and*
+  the operand is `GpuFloatBuffer`-backed, routing to a new `TransposeGpu()`
+  when both hold and to the unchanged, renamed `TransposeScalar` (the
+  original implementation body, untouched) otherwise. Deliberately *not*
+  gated on `Backend` the way `MatMul`'s dispatch is - there's no competing
+  implementation to prefer here, only "does an efficient path exist for
+  this operand and shape," so a resident tensor always gets it regardless
+  of whatever `Backend` happens to be selected for unrelated ops at that
+  moment. `TransposeGpu` launches one ILGPU kernel
+  (`TransposeLastTwoDimsKernel`, one thread per output element,
+  `output[batch,i,j] = input[batch,j,i]`) via the same accelerator/kernel
+  caching pattern `MatMulGpu` already established, producing a new
+  device-resident result with no host round-trip either direction -
+  `Variable.MatMul`'s backward needed no changes at all to benefit, since
+  it just calls `.Transpose(...)` the same way it always has.
+  Tests: direct `TransposeGpu` correctness (matches the scalar reference
+  exactly, for a plain 2D swap, both dim orderings, and a batched 3D
+  shape), that a non-last-two-dims swap on a resident operand still falls
+  back to scalar correctly (proving the narrower scope is actually gated,
+  not just usually not hit), and - the real-world consumer -
+  `Variable.MatMul` gradient checks with one or both operands moved to
+  the GPU via `MoveToGpuInPlace`, proving backward stays correct end to
+  end through the new path, not just in isolation. All run against the
+  real AMD GPU via OpenCL. Solution-wide: 466 tests passing;
+  `Tensor.GpuFloatBuffer` back to 100%, `Tensor.Tensor` at 98% branch
+  coverage.
 
 - [ ] TASK-038: Device-resident elementwise ops - `Add`/`Subtract`/
   `Multiply`/`Divide` (broadcasting-aware, mirroring `ElementwiseBinary`'s

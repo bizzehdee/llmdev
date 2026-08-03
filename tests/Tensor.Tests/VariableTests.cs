@@ -179,6 +179,48 @@ public class VariableTests
         CheckGradient(vars => vars[0].Transpose(0, 1), RandomVariable([2, 3]));
     }
 
+    // TASK-037: Variable.MatMul's backward pass calls Tensor.Transpose on
+    // both operands (see Variable.MatMul.cs) - the actual real-world
+    // consumer of the device-resident Transpose path. Backward must stay
+    // correct whether either, both, or neither operand is GPU-resident.
+
+    [Fact]
+    public void MatMul_BothOperandsGpuResident_GradientMatchesFiniteDifference()
+    {
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            var a = RandomVariable([2, 3]);
+            var b = RandomVariable([3, 4]);
+            a.Value.MoveToGpuInPlace();
+            b.Value.MoveToGpuInPlace();
+
+            CheckGradient(vars => vars[0].MatMul(vars[1]), a, b);
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
+    [Fact]
+    public void MatMul_OneOperandGpuResident_GradientMatchesFiniteDifference()
+    {
+        Tensor.Backend = TensorBackend.Gpu;
+        try
+        {
+            var a = RandomVariable([2, 3]);
+            var b = RandomVariable([3, 4]);
+            b.Value.MoveToGpuInPlace();
+
+            CheckGradient(vars => vars[0].MatMul(vars[1]), a, b);
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
+    }
+
     [Fact]
     public void Reshape_GradientMatchesFiniteDifference()
     {
