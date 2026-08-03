@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Training\Training.csproj" />
     <ProjectReference Include="..\..\src\Model\Model.csproj" />
+    <ProjectReference Include="..\..\src\Tokeniser\Tokeniser.csproj" />
   </ItemGroup>
 
 </Project>

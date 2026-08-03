@@ -85,6 +85,74 @@ public class CrossEntropyLossTests
     }
 
     [Fact]
+    public void ComputeMasked_ReturnsScalarShape()
+    {
+        var logits = new Variable(TensorValue.Zeros([3, 5]));
+
+        var loss = CrossEntropyLoss.ComputeMasked(logits, [0, 1, 2], [false, true, true]);
+
+        Assert.Equal(new[] { 1 }, loss.Value.Shape);
+    }
+
+    [Fact]
+    public void ComputeMasked_UniformLogits_EqualsLogVocabSize()
+    {
+        // Same reasoning as Compute_UniformLogits_EqualsLogVocabSize: masking
+        // out some positions shouldn't change the *value* of the loss for
+        // the positions that remain, since it's still -log(1/vocabSize) at
+        // each of them and the mean divides by exactly the masked count.
+        const int vocabSize = 8;
+        var logits = new Variable(TensorValue.Zeros([4, vocabSize]));
+
+        var loss = CrossEntropyLoss.ComputeMasked(logits, [0, 3, 7, 1], [false, false, true, true]);
+
+        Assert.Equal(MathF.Log(vocabSize), loss.Value.ToArray()[0], precision: 4);
+    }
+
+    [Fact]
+    public void ComputeMasked_OnlyMaskedPositionsAffectTheLoss()
+    {
+        // Changing an unmasked position's target-logit confidence must not
+        // move the loss at all - only masked (response) positions should.
+        var valuesConfident = new float[] { 20, -20, -20, 0, 0, 0 };
+        var valuesUnconfident = new float[] { -20, -20, 20, 0, 0, 0 };
+        bool[] mask = [false, true];
+
+        var lossConfident = CrossEntropyLoss.ComputeMasked(new Variable(TensorValue.FromValues(valuesConfident, [2, 3])), [0, 0], mask);
+        var lossUnconfident = CrossEntropyLoss.ComputeMasked(new Variable(TensorValue.FromValues(valuesUnconfident, [2, 3])), [0, 0], mask);
+
+        Assert.Equal(lossConfident.Value.ToArray()[0], lossUnconfident.Value.ToArray()[0], precision: 4);
+    }
+
+    [Fact]
+    public void ComputeMasked_NoMaskedPositionsThrows()
+    {
+        var logits = new Variable(TensorValue.Zeros([3, 5]));
+
+        Assert.Throws<InvalidOperationException>(() => CrossEntropyLoss.ComputeMasked(logits, [0, 1, 2], [false, false, false]));
+    }
+
+    [Fact]
+    public void ComputeMasked_GradientOnlyFlowsToMaskedPositions()
+    {
+        var logits = new Variable(TensorValue.Zeros([3, 4]));
+
+        var loss = CrossEntropyLoss.ComputeMasked(logits, [0, 1, 2], [false, true, true]);
+        loss.Backward();
+
+        var grad = logits.Gradient.ToArray();
+        int cols = 4;
+        // Row 0 is unmasked: its gradient must be exactly zero everywhere.
+        for (int c = 0; c < cols; c++)
+        {
+            Assert.Equal(0f, grad[0 * cols + c]);
+        }
+        // Rows 1 and 2 are masked (response) positions: at least one
+        // column's gradient must be non-zero.
+        Assert.Contains(Enumerable.Range(1, 2), row => Enumerable.Range(0, cols).Any(c => grad[row * cols + c] != 0f));
+    }
+
+    [Fact]
     public void Compute_GradientMatchesFiniteDifference()
     {
         var rng = new Random(7);

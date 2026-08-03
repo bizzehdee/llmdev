@@ -319,7 +319,7 @@ TASK-001..013's original scope). Pairs naturally with TASK-014 (a fine-tuned
 checkpoint is what makes the chat CLI's output actually useful) but doesn't
 depend on it - this can be built and tested independently of the CLI.
 
-- [ ] TASK-016: Instruction tuning (SFT) - continue training a pretrained
+- [x] TASK-016: Instruction tuning (SFT) - continue training a pretrained
   `GptModel` checkpoint on (instruction, response) example pairs, with the
   loss restricted to response tokens only. Two genuinely new capabilities
   needed, not just re-wiring TASK-010/011/012 (see PLAN.md stage 10 for the
@@ -352,6 +352,47 @@ depend on it - this can be built and tested independently of the CLI.
   as an offline one-time data-prep tool (review before use, don't accept
   uncritically), and/or existing public instruction-tuning datasets
   (mind licensing) reformatted to whatever template this task settles on.
+  Done: chose JSON Lines over a plain-text template - the more extensible
+  of the two named options, and avoids needing escaping rules of its own
+  the moment an instruction/response contains whatever delimiter a
+  plain-text template would use. `Training.SftExample`/`SftTokenizedExample`
+  (`src/Training/SftExample.cs`) and `Training.SftDataset`
+  (`src/Training/SftDataset.cs`): `Load` reads one JSON object per
+  non-blank line; `Tokenize` wraps the instruction in a fixed
+  `"### Instruction:\n{0}\n\n### Response:\n"` prompt template and
+  tokenises the templated prompt and the response *separately* (not the
+  whole string in one `Encode` call), guaranteeing an exact token-level
+  split regardless of where BPE merges would otherwise fall across that
+  boundary; `ResponseMask[i]` is true iff position i's *target* (the
+  standard next-token shift) falls at or past where the prompt's tokens
+  end. `CrossEntropyLoss.ComputeMasked` (refactored the shared
+  log-softmax-at-target-tokens computation out of `Compute` into a
+  private `TargetLogProbs` helper both now call) zeroes out non-response
+  positions before summing and divides by the *masked* count, not the
+  total position count - averaging over everything would dilute the loss
+  whenever a prompt is long relative to its response. `Training.SftTrainer`
+  (`src/Training/SftTrainer.cs`) is a sibling to `Trainer`, not a
+  generalisation of it - deliberate design call: the two operate over
+  genuinely different data shapes (continuous-stream sliding windows vs.
+  standalone instruction/response sequences) and different losses, so
+  sharing an abstraction would cost more in indirection than it would
+  save in duplication. Advances sequentially through the (typically
+  small, curated) dataset rather than resampling randomly like
+  `BatchSampler` does for a large pretraining corpus; gradient-accumulates
+  over a batch the same way `Trainer.Step` does. Doesn't touch
+  checkpointing itself (same as `Trainer`) - callers construct the model
+  via `ModelCheckpoint.Load` and save the fine-tuned result to a separate
+  path via `ModelCheckpoint.Save`; the learning-rate guidance (a tenth or
+  less of pretraining's) is documented on the class, configured on the
+  `IOptimizer` passed in. Tested: `SftDataset` tokenisation/masking
+  correctness (mask is a contiguous true suffix, JSON Lines parsing,
+  malformed-line handling) using a real trained `BpeTokeniser`;
+  `CrossEntropyLoss.ComputeMasked` (scalar shape, masked-value-only
+  effect on the loss, gradient only reaching masked positions, the
+  no-masked-positions guard); an end-to-end `SftTrainer` test proving
+  loss actually drops substantially on a small repetitive pattern,
+  mirroring `TrainerTests`' pretraining equivalent. Solution-wide branch
+  coverage held (`Training` 98.8%).
   Depends on: TASK-011, TASK-012
 
 ## Known limitations follow-ups
