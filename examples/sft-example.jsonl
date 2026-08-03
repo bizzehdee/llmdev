@@ -1,0 +1,6 @@
+{"instruction": "What is the capital of France?", "response": "The capital of France is Paris."}
+{"instruction": "Name three primary colours.", "response": "Red, blue, and yellow are the three primary colours."}
+{"instruction": "Summarise what a tokeniser does.", "response": "A tokeniser converts text into a sequence of integer token ids, and back again, so a model can work with numbers instead of raw characters."}
+{"instruction": "Write a one-sentence greeting.", "response": "Hello! It's great to have you here."}
+{"instruction": "What does BPE stand for?", "response": "BPE stands for Byte-Pair Encoding."}
+{"instruction": "Give an example of a primary colour.", "response": "Blue is an example of a primary colour."}

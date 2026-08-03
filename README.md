@@ -3,27 +3,47 @@
 A personal project to learn how LLMs work by building one from first
 principles in C#/.NET — no ML, tokenisation, or tensor/autodiff libraries
 (one narrow, explicitly-scoped exception: an opt-in `--optimised` fast path
-for tensor math, stage 9 below — off by default, and not a replacement for
+for tensor math, stage 8 below — off by default, and not a replacement for
 the hand-written implementation it speeds up). Every mechanism (tokeniser,
 tensor math, autodiff, attention, training loop, generation, instruction
 tuning) is written by hand so it's understood, not a black box behind a
 library call.
 
-This README is a lesson plan: one section per stage, in the order they were
-built, each covering what problem the stage solves, what's actually
-happening conceptually, which source files to go read, and what to run to
-see it working. Every stage below is built and runnable today — see
-[Project status](#project-status) for the one honest caveat worth knowing
-about before you expect too much of it as a chatbot.
+This README is a lesson plan: one section per stage, each covering what
+problem the stage solves, what's actually happening conceptually, which
+source files to go read, and what to run to see it working. Every stage
+below is built and runnable today — see [Project status](#project-status)
+for the one honest caveat worth knowing about before you expect too much of
+it as a chatbot.
 
-See [PLAN.md](PLAN.md) for the full roadmap/rationale and [TASK.md](TASK.md)
-for the task-by-task history of how it got built.
+Stages are numbered in the order it makes sense to *approach* them, not the
+order they were originally built in — see [PLAN.md](PLAN.md) if you want the
+build history instead (its own stage numbers differ slightly, since
+instruction tuning and the chat CLI were added after the original plan and
+this README now presents them in a more sensible reading order: fine-tune
+*before* you sit down to chat, since the chat CLI barely resembles a useful
+assistant without it). [TASK.md](TASK.md) has the task-by-task history of
+how everything below got built.
+
+Two different kinds of section follow, and it matters which is which:
+
+- **Stages with a CLI** (1, 6, 9, 10) each produce or use a model artifact
+  (a trained vocabulary, a checkpoint) and are things you actually *run*.
+  Every one of these includes a real example command and the real output it
+  produced when this README was written.
+- **Stages without a CLI** (2–5, 7, 8) are learning steps: library code with
+  no standalone command of its own, exercised only by tests and by the CLI
+  stages above/after them. Understanding what they do is what makes the CLI
+  stages make sense, but there's nothing new to *run* for them beyond
+  `dotnet test`.
 
 ## Requirements
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 
 ## Stage 1 — Tokeniser
+
+*(Has a CLI.)*
 
 **Problem it solves:** a neural network works on numbers, not text. Something
 has to turn raw text into a sequence of integers (and back again) before any
@@ -52,8 +72,38 @@ in RAM).
 
 ```bash
 cd src/Tokeniser
-dotnet run -- 500 ../../sample.txt          # train on a single file
-dotnet run -- 2000 ~/Documents/some-corpus  # or every .txt file in a directory
+dotnet run -- <vocab-size> <file-or-directory> [file-or-directory ...] [--scratch-dir <dir>]
+```
+
+Example, training a tiny 400-token vocabulary on a small repeated corpus
+(the corpus used throughout this README's examples touches the same topics
+as [`examples/sft-example.jsonl`](examples/sft-example.jsonl) below, so the
+pipeline stays coherent end to end; real command, real output):
+
+```text
+$ dotnet run -- 400 big_corpus.txt --scratch-dir /mnt/data/scratch
+
+Training BPE tokeniser on 1 file(s), 0.0 MB, target vocab size 400 (~0 MB disk scratch in /mnt/data/scratch)...
+  vocab 300/400 (00:00)
+  vocab 400/400 (00:00)
+Trained vocabulary size: 400 in 00:00
+
+Sample text:
+The capital of France is Paris. Paris is a large city in France.
+Red, blue, and yellow are the three primary colours. Blue is a colour.
+A tokeniser converts text into a sequence of integer token ids a
+
+Encoded (50 tokens):
+393 399 308 310 266 307 46 307 266 256 314 264 331 398 274 310 260 392 44 368 44 300 377 347 363 365 390 121 382 46 357 266 256 304 260 65 383 366 354 397 362 256 374 395 308 361 332 277 349 256
+
+Decoded (should match sample text):
+The capital of France is Paris. Paris is a large city in France.
+Red, blue, and yellow are the three primary colours. Blue is a colour.
+A tokeniser converts text into a sequence of integer token ids a
+
+Roundtrip match: True
+
+Saved vocabulary + merges to vocab.bpe
 ```
 
 This trains a vocabulary, prints a sample encode/decode roundtrip, and
@@ -68,6 +118,9 @@ cd tests/Tokeniser.Tests && dotnet test
 ```
 
 ## Stage 2 — Tensor + autodiff engine
+
+*(No CLI — a learning/foundation step. Its logic runs inside every later
+stage; there's nothing to invoke directly beyond its tests.)*
 
 **Problem it solves:** everything from here on is matrix/vector math, and
 training requires computing gradients of a loss with respect to every
@@ -87,13 +140,17 @@ storage is swappable between the managed heap and a disk-backed
 tensor large enough to matter can live on disk instead of pushing the
 process towards an OOM kill.
 
+Understanding this stage is what makes stage 6's training loop (and its
+CLI) make sense: every "forward pass, then backward pass, then optimizer
+step" you'll see described later is built entirely out of the `Tensor`/
+`Variable` operations defined here.
+
 **Source files:** `src/Tensor/Tensor.*.cs` (the tensor type, split across
 files by operation group), `src/Tensor/Variable*.cs` (the autodiff layer),
 `src/Tensor/{HeapFloatBuffer,MappedFloatBuffer,IFloatBuffer}.cs` (the
 storage abstraction).
 
-**Run it:** there's no CLI for this stage — it's a library other stages
-build on. The tests *are* the way to see it working, including
+**Run it:** no CLI - the tests *are* the way to see it working, including
 finite-difference gradient checks (numerically perturb an input, compare
 against the analytic gradient `Backward()` computed) rather than only
 hand-derived expected values:
@@ -103,6 +160,9 @@ cd tests/Tensor.Tests && dotnet test
 ```
 
 ## Stage 3 — Embeddings
+
+*(No CLI — a learning step. Its output feeds directly into stage 5's model
+assembly.)*
 
 **Problem it solves:** a token id is just an arbitrary integer with no
 notion of meaning or similarity, and attention (stage 4) has no inherent
@@ -118,7 +178,7 @@ identity, added elementwise to the token embedding so the model can tell
 
 **Source files:** `src/Model/TokenEmbedding.cs`, `src/Model/PositionalEmbedding.cs`.
 
-**Run it:** again a library piece, exercised by:
+**Run it:** no CLI - again a library piece, exercised by:
 
 ```bash
 cd tests/Model.Tests && dotnet test
@@ -128,6 +188,9 @@ cd tests/Model.Tests && dotnet test
 test project for the whole `Model` project.)
 
 ## Stage 4 — Attention + transformer block
+
+*(No CLI — a learning step. Its output feeds directly into stage 5's model
+assembly.)*
 
 **Problem it solves:** a model needs a way to let each position in a
 sequence gather information from *other* positions — "what came before this
@@ -152,12 +215,15 @@ without vanishing.
 `src/Model/MultiHeadAttention.cs`, `src/Model/FeedForward.cs`,
 `src/Model/LayerNorm.cs`, `src/Model/TransformerBlock.cs`.
 
-**Run it:** `cd tests/Model.Tests && dotnet test` (as above) — includes an
-end-to-end check that causal masking actually holds through a full block
-(changing a later token's value must never change an earlier position's
-output).
+**Run it:** no CLI - `cd tests/Model.Tests && dotnet test` (as above) —
+includes an end-to-end check that causal masking actually holds through a
+full block (changing a later token's value must never change an earlier
+position's output).
 
 ## Stage 5 — Model assembly
+
+*(No CLI — a learning step. This is the last piece before stage 6's CLI can
+actually build and train something.)*
 
 **Problem it solves:** stages 2–4 are all *pieces*; something has to stack
 them into an actual language model.
@@ -169,15 +235,20 @@ output projection reuses (rather than duplicates) the token embedding's
 weight matrix, transposed — "weight tying", which halves what would
 otherwise be two separate `[vocabSize, embeddingDim]`-sized matrices and is
 a reasonable prior besides (a token's input representation and its output
-"how likely is this next" score plausibly share structure).
+"how likely is this next" score plausibly share structure). Stage 6's CLI
+is what actually *constructs* one of these from architecture flags you
+supply on the command line - this stage is where that architecture is
+defined.
 
 **Source files:** `src/Model/GptModel.cs`.
 
-**Run it:** `cd tests/Model.Tests && dotnet test` (as above) — includes
-finite-difference gradient checks through the *entire* model, not just
-individual layers.
+**Run it:** no CLI - `cd tests/Model.Tests && dotnet test` (as above) —
+includes finite-difference gradient checks through the *entire* model, not
+just individual layers.
 
 ## Stage 6 — Training loop
+
+*(Has a CLI.)*
 
 **Problem it solves:** a freshly constructed model's weights are random
 noise. Training is the process of adjusting them, via gradient descent, so
@@ -211,12 +282,29 @@ dotnet run -- <vocab-path> <output-checkpoint-path> <corpus-file-or-directory> [
   [--scratch-dir <dir>] [--optimised]
 ```
 
+Example, training a tiny model on the same corpus stage 1 tokenised, using
+the `vocab.bpe` that stage produced (real command, real output — a toy-sized
+model trained for only 300 steps, so the loss reaching ~0.01 reflects
+memorising a small repetitive corpus, not general fluency):
+
+```text
+$ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
+    --embedding-dim 32 --layers 2 --heads 2 --context-length 128 \
+    --steps 300 --batch-size 4 --learning-rate 0.003 --scratch-dir /mnt/data/scratch
+
+Bulk-encoding 1 corpus file(s)...
+Training a 2-layer, 32-dim GptModel for 300 steps (batch size 4, context length 128, 5220 tokens)...
+step 0: loss 5.9995
+step 100: loss 0.3141
+step 200: loss 0.0303
+step 299: loss 0.0121
+Saved checkpoint to model.checkpoint.
+```
+
 Loads a vocabulary already trained via the [tokeniser CLI](#stage-1--tokeniser),
 bulk-encodes the corpus (stage 1's `EncodeBulk`, not `Encode` — the
 large-corpus path), trains a fresh `GptModel` from scratch, prints loss
-periodically, and saves a checkpoint — the same architecture/hyperparameter
-flags the [worked example](#putting-it-together-training-and-generating-from-code)
-below hardcodes, exposed as CLI flags with the same defaults instead.
+periodically, and saves a checkpoint.
 
 ```bash
 cd tests/Pretrain.Tests && dotnet test
@@ -227,6 +315,10 @@ both include genuine end-to-end proof: loss measurably drops over training
 steps on a small, deliberately repetitive corpus.
 
 ## Stage 7 — Generation
+
+*(No CLI of its own — its logic is what stage 10's chat CLI actually calls
+at runtime. Understanding it explains what that CLI is doing under the
+hood.)*
 
 **Problem it solves:** a trained model outputs logits (raw, unnormalised
 scores) over the vocabulary for "what comes next" — something has to turn
@@ -252,8 +344,9 @@ would have paid on *every* step.
 `src/Generation/SamplingOptions.cs`, `src/Generation/TextGenerator.cs`,
 `src/Model/GenerationCache.cs`.
 
-**Run it:** see the [full worked example](#putting-it-together-training-and-generating-from-code)
-below, or stage 8's interactive CLI for a more hands-on way to try it.
+**Run it:** no CLI of its own - see stage 10's chat CLI below for the
+hands-on way to exercise it, or the [worked example](#putting-it-together-training-and-generating-from-code)
+further down for a direct code path.
 
 ```bash
 cd tests/Generation.Tests && dotnet test
@@ -265,42 +358,10 @@ KV-cached generation path produces *exactly* the same output as a
 from-scratch, non-cached recompute at every step — not just "plausibly
 similar text."
 
-## Stage 8 — Interactive chat CLI
+## Stage 8 — Optional optimised math backend
 
-**Problem it solves:** stages 1–7 are only usable via a one-off C# snippet
-(the [worked example](#putting-it-together-training-and-generating-from-code)
-below) — there's no way to just sit down and talk to a trained model
-turn-by-turn.
-
-**What's happening:** loads a saved `ModelCheckpoint` + tokeniser vocab,
-then loops: read a line of input, generate a continuation, print it,
-repeat. Conversation state is a single growing token-id sequence (not
-re-encoded text each turn), so multi-turn context accumulates correctly.
-
-**Honest expectation-setting, not a bug:** this is a *raw
-next-token-prediction model*, not an instruction-tuned assistant, unless
-you've separately fine-tuned it per stage 10 below — and even then, the CLI
-itself doesn't automatically wrap what you type in stage 10's prompt
-template, so a stage-10-tuned model won't behave as intended unless you
-type your input already shaped the way that template expects. Without
-fine-tuning, it will continue text in the style of whatever it was trained
-on, not necessarily answer questions or follow instructions. The CLI says
-this up front, not just here.
-
-**Source files:** `src/Chat/ChatCli.cs`.
-
-**Run it:**
-
-```bash
-cd src/Chat
-dotnet run -- <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>] [--max-new-tokens <n>] [--optimised]
-```
-
-```bash
-cd tests/Chat.Tests && dotnet test
-```
-
-## Stage 9 — Optional optimised math backend (`--optimised`)
+*(No CLI of its own — it's a flag (`--optimised`) accepted by the stage 6,
+9, and 10 CLIs, not a pipeline stage you run on its own.)*
 
 **Problem it solves:** the hand-written scalar tensor math (stage 2) is
 correct and easy to reason about, but slow — useful for learning, painful
@@ -325,14 +386,19 @@ rule intact no matter which backend is selected.
 **Source files:** `src/Tensor/TensorBackend.cs`, `src/Tensor/Tensor.MatMul.cs`,
 `src/Tensor/{HeapFloatBuffer,MappedFloatBuffer}.cs` (`TryGetSpan`).
 
-**Run it:** pass `--optimised` to the [chat CLI](#stage-8--interactive-chat-cli)
-above, or set `Tensor.Backend = TensorBackend.Optimised` in your own code
+**Run it:** no CLI of its own - pass `--optimised` to the [pretraining](#stage-6--training-loop),
+[instruction-tuning](#stage-9--instruction-tuning-sft), or [chat](#stage-10--interactive-chat-cli)
+CLIs, or set `Tensor.Backend = TensorBackend.Optimised` in your own code
 before calling into the model. Verified by running the *same* test suite
 (including every stage-2 finite-difference gradient check) against both
 backends and confirming equivalent results — see the `[Theory]`-parametrised
 tests in `tests/Tensor.Tests/{TensorTests,VariableTests}.cs`.
 
-## Stage 10 — Instruction tuning (SFT)
+## Stage 9 — Instruction tuning (SFT)
+
+*(Has a CLI. Deliberately placed before the chat CLI below - fine-tuning is
+what makes the chat CLI worth using; without it you're chatting with a raw
+next-token predictor.)*
 
 **Problem it solves:** a model trained purely on raw text (stages 1–7)
 continues text in the style of its training corpus — it has no particular
@@ -370,6 +436,14 @@ one-time data-prep tool (review before use, don't accept uncritically); or
 adapting an existing public instruction-tuning dataset (mind licensing,
 and reformat to this project's template).
 
+**Example dataset file:** [`examples/sft-example.jsonl`](examples/sft-example.jsonl)
+is a small, ready-to-use starter file - one JSON object per line:
+
+```json
+{"instruction": "What is the capital of France?", "response": "The capital of France is Paris."}
+{"instruction": "Name three primary colours.", "response": "Red, blue, and yellow are the three primary colours."}
+```
+
 **Source files:** `src/Training/{SftExample,SftDataset,SftTrainer}.cs`,
 `src/Training/CrossEntropyLoss.cs` (`ComputeMasked`), `src/Sft/SftCli.cs`.
 
@@ -381,12 +455,29 @@ dotnet run -- <base-checkpoint-path> <vocab-path> <dataset-path> <output-checkpo
   [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]
 ```
 
-Loads a checkpoint produced by [stage 6's CLI](#stage-6--training-loop) (or
-the worked example below), fine-tunes it on a JSON Lines instruction/
-response dataset, and saves the result to `<output-checkpoint-path>` — which
-must differ from `<base-checkpoint-path>`; the CLI refuses to overwrite the
-base pretrained checkpoint. `--learning-rate` defaults to a tenth of stage
-6's pretraining default, per this stage's own guidance above.
+Example, fine-tuning the checkpoint stage 6 produced above on
+[`examples/sft-example.jsonl`](examples/sft-example.jsonl) (real command,
+real output - `--batch-size` here equals the dataset size, i.e. every
+example contributes to every step's gradient, which converges far more
+smoothly on a dataset this small than a smaller batch size did when we
+first tried this):
+
+```text
+$ dotnet run -- model.checkpoint vocab.bpe examples/sft-example.jsonl model-sft.checkpoint \
+    --steps 300 --batch-size 6 --learning-rate 0.0001
+
+Fine-tuning on 6 example(s) for 300 steps (batch size 6)...
+step 0: loss 3.1110
+step 100: loss 1.1247
+step 200: loss 0.8657
+step 299: loss 0.7564
+Saved fine-tuned checkpoint to model-sft.checkpoint.
+```
+
+The output checkpoint path must differ from the base checkpoint path - the
+CLI refuses to overwrite the base pretrained checkpoint. `--learning-rate`
+defaults to a tenth of stage 6's pretraining default, per this stage's own
+guidance above.
 
 ```bash
 cd tests/Sft.Tests && dotnet test
@@ -396,16 +487,81 @@ cd tests/Training.Tests && dotnet test
 includes an end-to-end proof that loss actually drops on a small repetitive
 instruction/response pattern, mirroring stage 6's pretraining equivalent.
 
+## Stage 10 — Interactive chat CLI
+
+*(Has a CLI.)*
+
+**Problem it solves:** everything before this point is only usable via a
+one-off command or C# snippet — there's no way to just sit down and talk to
+a trained model turn-by-turn.
+
+**What's happening:** loads a saved `ModelCheckpoint` + tokeniser vocab,
+then loops: read a line of input, generate a continuation, print it,
+repeat. Conversation state is a single growing token-id sequence (not
+re-encoded text each turn), so multi-turn context accumulates correctly.
+
+**Honest expectation-setting, not a bug:** a model that only went through
+stage 6 (pretraining) is a *raw next-token-prediction model*, not an
+instruction-tuned assistant - it will continue text in the style of
+whatever it was trained on, not necessarily answer questions or follow
+instructions. Stage 9's fine-tuning makes it meaningfully more likely to
+behave like something worth talking to - but even then, this CLI reads one
+line of input as one turn, with no special handling for stage 9's
+multi-line prompt template. If your fine-tuning data was templated as
+`"### Instruction:\n{instruction}\n\n### Response:\n"`, typing a bare
+one-line question here isn't the same shape of input the model was tuned
+on, so don't expect it to follow the template's implicit contract as
+reliably as it would through code that reproduces the template exactly (see
+`SftDataset.Tokenize`). The CLI's own `--help`/banner text says this up
+front too, not just here.
+
+**Source files:** `src/Chat/ChatCli.cs`.
+
+**Run it:**
+
+```bash
+cd src/Chat
+dotnet run -- <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>] [--max-new-tokens <n>] [--optimised]
+```
+
+Example, chatting with the stage-9 fine-tuned checkpoint from above (real
+command, real output - greedy sampling, and a *tiny*, undertrained toy model
+by design, so don't expect fluent prose; this is here to show the mechanism
+working end to end, not to demonstrate quality). Note this is exactly the
+"doesn't automatically apply the template" caveat below in action: typing a
+bare one-line question doesn't reproduce the `"### Instruction:\n{instruction}\n\n### Response:\n"`
+shape the model was actually fine-tuned on, so instead of answering it
+continues into whatever text its training distribution makes most likely
+next:
+
+```text
+$ dotnet run -- model-sft.checkpoint vocab.bpe --temperature 0 --max-new-tokens 15
+
+Loaded model and vocabulary. This is a raw next-token-prediction model, not an
+instruction-tuned assistant: it will continue text in the style of whatever it was
+trained on, not necessarily answer questions or follow instructions.
+Type /exit (or send EOF, e.g. Ctrl+D) to leave.
+
+> What is the capital of France?
+, blue, and yellow are the three primary colours. Blue is a
+> /exit
+Goodbye.
+```
+
+```bash
+cd tests/Chat.Tests && dotnet test
+```
+
 ## Putting it together: training and generating from code
 
 Every stage that touches a model artifact now has a CLI (tokeniser -
-stage 1, pretraining - stage 6, instruction tuning - stage 10, chat -
-stage 8). The example below walks through stages 2–7 (pretraining +
+stage 1, pretraining - stage 6, instruction tuning - stage 9, chat -
+stage 10). The example below walks through stages 2–7 (pretraining +
 generation) as a from-scratch C# snippet anyway, for anyone who wants to
 see the pieces wired together directly rather than through the stage 6
-CLI; stage 10's fine-tuning loop looks the same shape, just with
+CLI; stage 9's fine-tuning loop looks the same shape, just with
 `SftDataset.Load` + `SftTrainer` in place of `TokenCorpus`/`BatchSampler` +
-`Trainer` (or just use [its CLI](#stage-10--instruction-tuning-sft)
+`Trainer` (or just use [its CLI](#stage-9--instruction-tuning-sft)
 directly on a checkpoint this example produced).
 
 ```csharp
@@ -466,7 +622,7 @@ Console.WriteLine(generated);
 
 Notes on the numbers above: `embeddingDim`/`numLayers`/`numHeads`/`steps`
 are small, fast-to-run placeholders, not tuned hyperparameters — scale them
-up (and expect training to take much longer, or reach for stage 9's
+up (and expect training to take much longer, or reach for stage 8's
 `--optimised`/CPU-parallelism if it does) for a model that produces
 coherent text. `contextLength`/`maxSequenceLength` must match between the
 sampler and the model.
@@ -506,6 +662,7 @@ dotnet run
 - `src/Generation/` — `SamplingOptions`, `TokenSampler`, and
   `TextGenerator` (KV-cached autoregressive generation).
 - `src/Chat/` — the interactive chat CLI.
+- `examples/sft-example.jsonl` — a ready-to-use starter instruction-tuning dataset.
 - `tests/*.Tests/` — one xUnit project per `src/` project above, mirroring
   its structure.
 
@@ -519,9 +676,10 @@ along the way. The one thing genuinely out of scope, not just "not done
 yet": GPU/distributed training — this project targets a single
 CPU-only machine throughout.
 
-The one honest caveat worth repeating from stage 8: fine-tuning a model
-(stage 10) makes it more likely to behave like a useful conversational
+The one honest caveat worth repeating from stage 10: fine-tuning a model
+(stage 9) makes it more likely to behave like a useful conversational
 assistant, but the chat CLI doesn't automatically format what you type
-using stage 10's prompt template — for a fine-tuned model to behave as
-intended, whatever prompts it needs to be shaped the way that template
-expects, not just typed as a bare instruction.
+using stage 9's prompt template, and its one-line-per-turn input doesn't
+naturally reproduce a multi-line template either — for a fine-tuned model
+to behave as intended, prompts need to be shaped the way that template
+expects, which the interactive CLI only approximates, not guarantees.
