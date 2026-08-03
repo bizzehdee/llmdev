@@ -672,42 +672,56 @@ PLAN.md's standing "memory constraint" rule - disk-backed scratch structures
 in place of large heap allocations, since this project has genuinely
 OOM-killed itself before - isn't just a design aspiration. Here's what it
 looks like in practice, measured on this machine (`/usr/bin/time -v` for
-peak RAM, real byte counts for disk) against a small, real 2.0 MB text
-corpus - the same one this README's other examples use:
+peak RAM, real byte counts for disk) against three real corpora at 2 MB,
+4 MB, and 10 MB, so the *trend* as input size grows is visible, not just one
+data point:
 
-| Step | Input | Disk (transient scratch, deleted after) | Disk (permanent output) | Peak RAM |
+**Stage 1 (tokeniser training)** - same target vocab size (1000) each time:
+
+| Input text | Disk scratch (transient) | Peak RAM | `vocab.bpe` output |
+|---|---|---|---|
+| 2.0 MB | ~32 MB | ~216 MB | 8 KB |
+| 4.0 MB | ~61 MB | ~365 MB | 8 KB |
+| 10.0 MB | ~153 MB | ~840 MB | 8 KB |
+
+**Stage 6 (pretraining)** - same small 4-layer, 128-dim model architecture
+each time, using the vocab/corpus from the matching row above:
+
+| Input text | Tokens | Disk (token corpus) | Peak RAM | `model.checkpoint` output |
 |---|---|---|---|---|
-| Stage 1: tokeniser training | 2.0 MB text | ~32 MB (`BpeTokeniser.Train`'s scratch arrays) | `vocab.bpe`: 8 KB | ~216 MB |
-| Stage 6: pretraining | same corpus + vocab → 468,003 tokens | ~1.8 MB (`TokenCorpus`, 4 bytes/token) | `model.checkpoint`: 3.3 MB (a small 4-layer, 128-dim model) | ~217 MB |
+| 2.0 MB | 468,003 | ~1.8 MB | ~217 MB | 3.3 MB |
+| 4.0 MB | 893,181 | ~3.4 MB | ~366 MB | 3.3 MB |
+| 10.0 MB | 2,232,831 | ~8.5 MB | ~848 MB | 3.3 MB |
 
-The tokeniser training scratch figure isn't an estimate for this table
-specifically - it's the exact number `TokeniserCli` itself prints before
-training starts (`EstimateScratchBytes`: 16 bytes of scratch per byte of
-input, from 4 `int32` arrays sized to the corpus - see stage 1 above), and
-it's what determines whether the CLI refuses to run for being too large for
-available disk space.
+The disk-scratch figures aren't estimates for this table specifically -
+they're the exact numbers `TokeniserCli` itself prints before training
+starts (`EstimateScratchBytes`: 16 bytes of scratch per byte of input, from
+4 `int32` arrays sized to the corpus - see stage 1 above), and they scale
+*exactly* linearly with input size, as the formula guarantees. The two
+output artifacts (`vocab.bpe`, `model.checkpoint`) stay a *constant* size
+across all three rows - they're sized by vocabulary/architecture, not by
+how much text produced them.
 
-**The point worth taking away isn't the absolute numbers** (this is a toy
-corpus and a toy model - real ones are bigger in both directions) **but
-that peak RAM barely moved between the two rows** (~216 MB → ~217 MB)
-*despite* the corpus turning into nearly half a million tokens along the
-way. At this small scale, that ~216 MB floor is mostly the .NET runtime
-itself (JIT, GC, framework overhead) rather than anything belonging to this
-project's data - but the trend is the real result: disk usage scales with
-*input size*, while RAM stays governed by *model size* (parameter count) and
-a roughly-fixed runtime floor, not by how much text or how many tokens you
-throw at it. Scale the input corpus up 10x and the disk-scratch/token-corpus
-figures scale with it (~320 MB, ~18 MB) - not the RAM.
-
-That trade only holds because of what's *not* on the heap: `BpeTokeniser.Train`'s
-occurrence-tracking arrays, `TokenCorpus`'s token stream, and (optionally,
-for a large enough model) `AdamWOptimizer`'s moment estimates are all
-`MappedArray<T>`-backed rather than plain arrays - see stage 2's storage
-abstraction and TASK-019 in [TASK.md](TASK.md). A model's own weights,
-gradients, and (by default) optimizer state are still heap-backed, which is
-why RAM tracks *model* size, not corpus size - a much bigger model (more
-layers/wider embeddings) would show up as a bigger number in the RAM
-column, not the disk ones.
+**The honest surprise in this data, found by actually measuring three sizes
+instead of one:** peak RAM scales with input size too, roughly linearly (2
+MB → 4 MB roughly doubles it, 4 MB → 10 MB roughly triples it), in *both*
+steps - it does not stay flat the way the disk-backed design might suggest.
+The reason is a real, current gap rather than something this project got
+right: `BpeTokeniser.Train` and `EncodeBulk` both go through
+`LinkedTokenStream.Build`, which reads an entire input file via
+`File.ReadAllText` and chunks it (`PreTokeniser.Split`) *before* anything
+gets handed off to disk-backed storage - so the raw text itself sits fully
+on the managed heap during that step, proportional to file size. Only the
+*derived* integer arrays (`Token`/`Next`/`Prev`/`PairNext`, and later
+`TokenCorpus`) are `MappedArray<T>`-backed. What *does* stay flat regardless
+of corpus size is the output artifact size (confirmed above: `vocab.bpe` and
+`model.checkpoint` are identical across all three rows) - because those are
+governed by vocabulary size and model architecture, not by how much text
+you trained on. A much bigger model (more layers/wider embeddings) would
+grow the checkpoint size and pretraining's baseline RAM; a much bigger
+corpus, with today's implementation, grows RAM too, not just disk - worth
+knowing before pointing this at a genuinely large corpus on a
+memory-constrained machine.
 
 ## Project status
 
