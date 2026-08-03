@@ -844,8 +844,9 @@ dotnet run
 - `src/Common/MappedArray.cs` — disk-backed (memory-mapped) array type
   shared by the tokeniser and the tensor engine.
 - `src/Tensor/` — the N-dimensional `Tensor` type, the `Variable`
-  reverse-mode autodiff engine built on it, and the optional `--optimised`
-  backend (`TensorBackend.cs`).
+  reverse-mode autodiff engine built on it, the optional `--optimised` CPU
+  backend, and the optional `--gpu` ILGPU backend (`TensorBackend.cs`,
+  `GpuContext.cs`, `Tensor.MatMul.Gpu.cs`).
 - `src/Model/` — learned model components built on `Tensor`/`Variable`:
   token/positional embeddings, scaled dot-product and multi-head (causal)
   attention, layernorm, feed-forward, a GPT-2-style pre-norm
