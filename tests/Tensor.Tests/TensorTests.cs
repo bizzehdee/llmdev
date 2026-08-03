@@ -557,6 +557,71 @@ public class TensorTests
     }
 
     [Fact]
+    public void Concat_AlongAxisZero_AppendsRows()
+    {
+        using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+        using var b = Tensor.FromValues([5, 6], [1, 2]);
+
+        using var result = a.Concat(b, axis: 0);
+
+        Assert.Equal(new[] { 3, 2 }, result.Shape);
+        Assert.Equal(new float[] { 1, 2, 3, 4, 5, 6 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Concat_AlongAxisOne_AppendsColumns()
+    {
+        using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+        using var b = Tensor.FromValues([5, 6], [2, 1]);
+
+        using var result = a.Concat(b, axis: 1);
+
+        Assert.Equal(new[] { 2, 3 }, result.Shape);
+        Assert.Equal(new float[] { 1, 2, 5, 3, 4, 6 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Concat_ThreeDimensional_AppendsAlongMiddleAxis()
+    {
+        // The shape KV-cache growth actually uses: [numHeads, seqLen, headDim].
+        using var a = Tensor.FromValues([1, 2, 3, 4], [2, 1, 2]);
+        using var b = Tensor.FromValues([5, 6, 7, 8], [2, 1, 2]);
+
+        using var result = a.Concat(b, axis: 1);
+
+        Assert.Equal(new[] { 2, 2, 2 }, result.Shape);
+        Assert.Equal(new float[] { 1, 2, 5, 6, 3, 4, 7, 8 }, result.ToArray());
+    }
+
+    [Fact]
+    public void Concat_RankMismatchThrows()
+    {
+        using var a = Tensor.Zeros([2, 2]);
+        using var b = Tensor.Zeros([2, 2, 1]);
+
+        Assert.Throws<InvalidOperationException>(() => a.Concat(b, axis: 0));
+    }
+
+    [Fact]
+    public void Concat_ShapeMismatchOutsideAxisThrows()
+    {
+        using var a = Tensor.Zeros([2, 3]);
+        using var b = Tensor.Zeros([5, 3]);
+
+        Assert.Throws<InvalidOperationException>(() => a.Concat(b, axis: 1));
+    }
+
+    [Fact]
+    public void Concat_AxisOutOfRangeThrows()
+    {
+        using var a = Tensor.Zeros([2, 2]);
+        using var b = Tensor.Zeros([2, 2]);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => a.Concat(b, axis: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => a.Concat(b, axis: 2));
+    }
+
+    [Fact]
     public void Reshape_PreservesDataInRowMajorOrder()
     {
         using var t = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);

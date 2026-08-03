@@ -7,11 +7,13 @@ namespace Generation;
 /// <summary>
 /// Runs a trained (or in-progress) <see cref="GptModel"/> autoregressively:
 /// repeatedly predict the next token, sample one (per
-/// <see cref="SamplingOptions"/>), append it, repeat. No KV-cache - each
-/// step recomputes a full forward pass over the whole context, which is
-/// the simple, correct thing rather than the fast thing (this is a
-/// learning project's generation loop, not a production inference
-/// server); noted in TASK.md as a known, deliberate limitation.
+/// <see cref="SamplingOptions"/>), append it, repeat. Uses a KV-cache
+/// (TASK-020, <see cref="GenerationCache"/>) so each step after the
+/// initial prompt only computes the one new token's Q/K/V instead of
+/// recomputing every layer over the whole growing context from scratch -
+/// mathematically identical to the old full-recompute approach at every
+/// step (see the KV-cache correctness tests), just without the repeated
+/// work.
 /// </summary>
 public static class TextGenerator
 {
@@ -20,23 +22,44 @@ public static class TextGenerator
     /// <paramref name="maxNewTokens"/> tokens. Once the sequence would
     /// exceed the model's context window, only the most recent
     /// <c>MaxSequenceLength</c> tokens are fed to the model (a sliding
-    /// window) - generation keeps going, just with truncated context.
+    /// window) - generation keeps going, just with truncated context. A
+    /// KV-cache can't simply be shifted when that happens (its positions
+    /// are tied to absolute offsets), so a sliding-window step rebuilds
+    /// the cache from scratch for the truncated window instead - the same
+    /// one-step cost the old always-recompute approach paid on *every*
+    /// step, just now confined to the (rare) truncation steps.
     /// </summary>
     public static List<int> GenerateTokenIds(GptModel model, int[] promptTokenIds, int maxNewTokens, SamplingOptions options, Random? random = null)
     {
         random ??= new Random();
         var tokens = new List<int>(promptTokenIds);
-
-        for (int step = 0; step < maxNewTokens; step++)
+        if (maxNewTokens <= 0)
         {
-            var context = tokens.Count > model.MaxSequenceLength
-                ? tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray()
-                : tokens.ToArray();
+            return tokens;
+        }
 
-            var logits = model.Forward(context).Value;
-            var nextTokenLogits = ExtractRow(logits, context.Length - 1);
+        using var cache = new GenerationCache(model.NumLayers);
 
-            tokens.Add(TokenSampler.Sample(nextTokenLogits, options, random));
+        var context = tokens.Count > model.MaxSequenceLength
+            ? tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray()
+            : tokens.ToArray();
+        var logits = model.ForwardIncremental(context, cache).Value;
+        tokens.Add(TokenSampler.Sample(ExtractRow(logits, logits.Shape[0] - 1), options, random));
+
+        for (int step = 1; step < maxNewTokens; step++)
+        {
+            if (tokens.Count > model.MaxSequenceLength)
+            {
+                cache.Reset();
+                context = tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray();
+                logits = model.ForwardIncremental(context, cache).Value;
+            }
+            else
+            {
+                logits = model.ForwardIncremental([tokens[^1]], cache).Value;
+            }
+
+            tokens.Add(TokenSampler.Sample(ExtractRow(logits, logits.Shape[0] - 1), options, random));
         }
 
         return tokens;

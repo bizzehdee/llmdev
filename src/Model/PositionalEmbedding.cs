@@ -33,17 +33,26 @@ public sealed class PositionalEmbedding
     /// add directly to a <see cref="TokenEmbedding"/> lookup over the same
     /// sequence.
     /// </summary>
-    public Variable Forward(int sequenceLength)
+    public Variable Forward(int sequenceLength) => Forward(sequenceLength, offset: 0);
+
+    /// <summary>
+    /// Returns the positional embedding for positions
+    /// offset..offset+sequenceLength-1. Used by TASK-020's KV-cached
+    /// generation path, where a step only computes embeddings for the
+    /// *new* tokens - which sit at absolute positions starting from
+    /// however many have already been cached, not position 0.
+    /// </summary>
+    public Variable Forward(int sequenceLength, int offset)
     {
-        if (sequenceLength > MaxSequenceLength)
+        if (offset + sequenceLength > MaxSequenceLength)
         {
-            throw new ArgumentOutOfRangeException(nameof(sequenceLength), $"Sequence length {sequenceLength} exceeds the {MaxSequenceLength} positions this embedding was sized for.");
+            throw new ArgumentOutOfRangeException(nameof(sequenceLength), $"Positions {offset}..{offset + sequenceLength - 1} exceed the {MaxSequenceLength} positions this embedding was sized for.");
         }
 
         var positionIds = new int[sequenceLength];
         for (int i = 0; i < sequenceLength; i++)
         {
-            positionIds[i] = i;
+            positionIds[i] = offset + i;
         }
         return Weight.GatherRows(positionIds);
     }

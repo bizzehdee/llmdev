@@ -60,6 +60,34 @@ public class PositionalEmbeddingTests
     }
 
     [Fact]
+    public void Forward_WithOffset_ReturnsPositionsStartingFromOffset()
+    {
+        // TASK-020: the KV-cache path looks up embeddings for absolute
+        // positions starting wherever the cache has already reached, not
+        // from position 0.
+        var embedding = new PositionalEmbedding(maxSequenceLength: 10, embeddingDim: 3, new Random(1));
+
+        var result = embedding.Forward(sequenceLength: 3, offset: 4);
+
+        Assert.Equal(new[] { 3, 3 }, result.Value.Shape);
+        for (int i = 0; i < 3; i++)
+        {
+            for (int d = 0; d < 3; d++)
+            {
+                Assert.Equal(embedding.Weight.Value[4 + i, d], result.Value[i, d]);
+            }
+        }
+    }
+
+    [Fact]
+    public void Forward_WithOffset_BeyondMaxThrows()
+    {
+        var embedding = new PositionalEmbedding(maxSequenceLength: 5, embeddingDim: 3, new Random(1));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => embedding.Forward(sequenceLength: 2, offset: 4));
+    }
+
+    [Fact]
     public void Forward_ZeroLengthReturnsEmptySequence()
     {
         var embedding = new PositionalEmbedding(maxSequenceLength: 4, embeddingDim: 3, new Random(1));

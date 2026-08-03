@@ -118,6 +118,54 @@ public class ScaledDotProductAttentionTests
     }
 
     [Fact]
+    public void Compute_QueryOffset_SingleNewQueryAttendsToEveryPriorKey()
+    {
+        // TASK-020's KV-cache case: one new query row (absolute position
+        // queryOffset) against every key up to and including its own -
+        // since queryOffset + 0 >= every key index < keyLen, nothing
+        // should be masked at all.
+        const int keyLen = 5, queryOffset = 4;
+        var q = RandomVariable([1, 4]);
+        var k = RandomVariable([keyLen, 4]);
+        var v = RandomVariable([keyLen, 4]);
+
+        var causalResult = ScaledDotProductAttention.Compute(q, k, v, causal: true, queryOffset);
+        var nonCausalResult = ScaledDotProductAttention.Compute(q, k, v, causal: false);
+
+        for (int d = 0; d < 4; d++)
+        {
+            Assert.Equal(nonCausalResult.Value[0, d], causalResult.Value[0, d], precision: 4);
+        }
+    }
+
+    [Fact]
+    public void Compute_QueryOffset_MatchesEquivalentFullSquareMask()
+    {
+        // A rectangular mask with queryOffset == keyLen - queryLen should
+        // produce exactly the rows a full square causal mask over the
+        // whole sequence would, for those same rows - the property the
+        // KV-cache path's correctness rests on.
+        const int fullLen = 5, newLen = 2;
+        var fullQ = RandomVariable([fullLen, 4]);
+        var k = RandomVariable([fullLen, 4]);
+        var v = RandomVariable([fullLen, 4]);
+
+        var fullResult = ScaledDotProductAttention.Compute(fullQ, k, v, causal: true);
+
+        var newQValues = fullQ.Value.ToArray().Skip((fullLen - newLen) * 4).ToArray();
+        var newQ = new Variable(TensorValue.FromValues(newQValues, [newLen, 4]));
+        var incrementalResult = ScaledDotProductAttention.Compute(newQ, k, v, causal: true, queryOffset: fullLen - newLen);
+
+        for (int i = 0; i < newLen; i++)
+        {
+            for (int d = 0; d < 4; d++)
+            {
+                Assert.Equal(fullResult.Value[fullLen - newLen + i, d], incrementalResult.Value[i, d], precision: 4);
+            }
+        }
+    }
+
+    [Fact]
     public void Compute_GradientMatchesFiniteDifference()
     {
         CheckGradient(vars => ScaledDotProductAttention.Compute(vars[0], vars[1], vars[2], causal: false),

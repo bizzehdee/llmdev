@@ -66,6 +66,37 @@ public sealed class GptModel
     }
 
     /// <summary>
+    /// TASK-020's KV-cached generation step: <paramref name="newTokenIds"/>
+    /// are only the tokens not yet processed (their absolute positions
+    /// start at <c>cache.Length</c>) - unlike <see cref="Forward"/>, which
+    /// always recomputes every layer over the *whole* context from
+    /// scratch. Returns logits for just the new positions, shape
+    /// [newTokenIds.Length, vocabSize]; grows <paramref name="cache"/> by
+    /// that many positions as a side effect. Mathematically identical to
+    /// calling <see cref="Forward"/> on the full sequence so far and
+    /// reading off the same rows - see the KV-cache correctness tests,
+    /// which verify that directly rather than just trusting the design.
+    /// </summary>
+    public Variable ForwardIncremental(int[] newTokenIds, GenerationCache cache)
+    {
+        int offset = cache.Length;
+        var x = TokenEmbedding.Forward(newTokenIds).Add(PositionalEmbedding.Forward(newTokenIds.Length, offset));
+
+        for (int layer = 0; layer < Blocks.Count; layer++)
+        {
+            x = Blocks[layer].ForwardIncremental(x, cache, layer);
+        }
+
+        x = FinalNorm.Forward(x);
+
+        var tiedOutputWeight = TokenEmbedding.Weight.Transpose(0, 1);
+        var logits = x.MatMul(tiedOutputWeight);
+
+        cache.AdvanceLength(newTokenIds.Length);
+        return logits;
+    }
+
+    /// <summary>
     /// Every trainable parameter, in a fixed deterministic order (used by
     /// both an optimizer and by checkpointing to line up saved values with
     /// the right Variable). Excludes the output projection: it's weight-tied

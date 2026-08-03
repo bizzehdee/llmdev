@@ -22,10 +22,20 @@ public static class ScaledDotProductAttention
     /// training would let the model "see" the very token it's supposed to
     /// predict.
     /// </param>
-    public static Variable Compute(Variable query, Variable key, Variable value, bool causal)
+    /// <param name="queryOffset">
+    /// TASK-020's KV-cached generation path calls Q, at a given step, over
+    /// only the *new* tokens, while K/V cover the *whole* cached sequence
+    /// so far - so query row i's real absolute position is
+    /// <paramref name="queryOffset"/> + i, not i, and that's what the
+    /// causal mask must compare against key position j. Zero (the
+    /// default) reproduces the ordinary square mask used everywhere else,
+    /// where query and key cover the same, single sequence.
+    /// </param>
+    public static Variable Compute(Variable query, Variable key, Variable value, bool causal, int queryOffset = 0)
     {
         int headDim = query.Value.Shape[^1];
-        int seqLen = query.Value.Shape[^2];
+        int queryLen = query.Value.Shape[^2];
+        int keyLen = key.Value.Shape[^2];
 
         var keyTransposed = key.Transpose(key.Value.Shape.Length - 2, key.Value.Shape.Length - 1);
         var scale = new Variable(TensorValue.FromValues([1f / MathF.Sqrt(headDim)], [1]));
@@ -33,7 +43,7 @@ public static class ScaledDotProductAttention
 
         if (causal)
         {
-            scores = scores.Add(CausalMask(seqLen));
+            scores = scores.Add(CausalMask(queryLen, keyLen, queryOffset));
         }
 
         var weights = scores.Softmax(axis: scores.Value.Shape.Length - 1);
@@ -41,22 +51,23 @@ public static class ScaledDotProductAttention
     }
 
     /// <summary>
-    /// A [seqLen, seqLen] additive mask: 0 where position i may attend to
-    /// position j (j &lt;= i), -infinity where it may not (j &gt; i).
-    /// -infinity rather than a large-but-finite negative number so
-    /// softmax's exp() zeroes those entries out exactly, with no residual
-    /// (however small) attention leaking into the future.
+    /// A [queryLen, keyLen] additive mask: 0 where query row i (absolute
+    /// position queryOffset + i) may attend to key position j (j &lt;=
+    /// queryOffset + i), -infinity where it may not. -infinity rather than
+    /// a large-but-finite negative number so softmax's exp() zeroes those
+    /// entries out exactly, with no residual (however small) attention
+    /// leaking into the future.
     /// </summary>
-    private static Variable CausalMask(int seqLen)
+    private static Variable CausalMask(int queryLen, int keyLen, int queryOffset)
     {
-        var values = new float[seqLen * seqLen];
-        for (int i = 0; i < seqLen; i++)
+        var values = new float[queryLen * keyLen];
+        for (int i = 0; i < queryLen; i++)
         {
-            for (int j = 0; j < seqLen; j++)
+            for (int j = 0; j < keyLen; j++)
             {
-                values[i * seqLen + j] = j > i ? float.NegativeInfinity : 0f;
+                values[i * keyLen + j] = j > queryOffset + i ? float.NegativeInfinity : 0f;
             }
         }
-        return new Variable(TensorValue.FromValues(values, [seqLen, seqLen]));
+        return new Variable(TensorValue.FromValues(values, [queryLen, keyLen]));
     }
 }

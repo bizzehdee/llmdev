@@ -62,6 +62,49 @@ public class TextGeneratorTests
     }
 
     [Fact]
+    public void GenerateTokenIds_MatchesANonCachedFullRecomputeReferenceImplementation()
+    {
+        // TASK-020's own bar applied at the public API level: the
+        // KV-cached generation loop must produce identical output to the
+        // old approach of recomputing the full forward pass from scratch
+        // every step - reimplemented here directly (not by calling
+        // TextGenerator itself) as the reference to compare against.
+        var model = new GptModel(vocabSize: 12, embeddingDim: 8, numLayers: 2, numHeads: 2, maxSequenceLength: 6, random: new Random(3));
+        int[] prompt = [2, 5, 1];
+        var options = SamplingOptions.Greedy();
+
+        var cachedResult = TextGenerator.GenerateTokenIds(model, prompt, maxNewTokens: 6, options);
+        var referenceResult = GenerateViaFullRecompute(model, prompt, maxNewTokens: 6, options);
+
+        Assert.Equal(referenceResult, cachedResult);
+    }
+
+    private static List<int> GenerateViaFullRecompute(GptModel model, int[] promptTokenIds, int maxNewTokens, SamplingOptions options)
+    {
+        var tokens = new List<int>(promptTokenIds);
+        var random = new Random();
+
+        for (int step = 0; step < maxNewTokens; step++)
+        {
+            var context = tokens.Count > model.MaxSequenceLength
+                ? tokens.Skip(tokens.Count - model.MaxSequenceLength).ToArray()
+                : tokens.ToArray();
+
+            var logits = model.Forward(context).Value;
+            int vocabSize = logits.Shape[1];
+            var row = new float[vocabSize];
+            for (int v = 0; v < vocabSize; v++)
+            {
+                row[v] = logits[context.Length - 1, v];
+            }
+
+            tokens.Add(TokenSampler.Sample(row, options, random));
+        }
+
+        return tokens;
+    }
+
+    [Fact]
     public void Generate_ReturnsTextStartingWithTheDecodedPrompt()
     {
         // Decode is plain concatenation of each token's bytes in order (see

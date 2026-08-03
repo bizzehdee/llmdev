@@ -42,6 +42,25 @@ public sealed class TransformerBlock
         return x;
     }
 
+    /// <summary>
+    /// TASK-020's KV-cached step: <paramref name="x"/> is only the new
+    /// tokens. <see cref="FeedForward"/>/<see cref="LayerNorm"/> apply
+    /// independently per position (no mixing across the sequence axis),
+    /// so running them over just the new positions is already identical
+    /// to running them as part of a full-sequence pass - only attention
+    /// needs the cache to see earlier positions.
+    /// </summary>
+    public Variable ForwardIncremental(Variable x, GenerationCache cache, int layerIndex)
+    {
+        var attended = Attention.ForwardIncremental(PreAttentionNorm.Forward(x), cache, layerIndex);
+        x = x.Add(attended);
+
+        var fed = FeedForward.Forward(PreFeedForwardNorm.Forward(x));
+        x = x.Add(fed);
+
+        return x;
+    }
+
     public IReadOnlyList<Variable> Parameters() =>
         [.. Attention.Parameters(), .. FeedForward.Parameters(), .. PreAttentionNorm.Parameters(), .. PreFeedForwardNorm.Parameters()];
 }

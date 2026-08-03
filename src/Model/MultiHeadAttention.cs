@@ -61,6 +61,38 @@ public sealed class MultiHeadAttention
         return merged.MatMul(OutputWeight);
     }
 
+    /// <summary>
+    /// TASK-020's KV-cached step: <paramref name="input"/> is only the
+    /// *new* tokens ([newLen, embeddingDim], newLen == 1 in the common
+    /// steady-state generation case, but any length works - e.g. an
+    /// initial multi-token prompt). Q/K/V are computed for just those new
+    /// positions; the new K/V are appended onto <paramref name="cache"/>'s
+    /// existing ones for this layer (see <see cref="Tensor.Tensor.Concat"/>),
+    /// and attention runs the new Q against the *whole* resulting K/V, so
+    /// the new tokens see every position processed so far without any of
+    /// those earlier positions being recomputed.
+    /// </summary>
+    public Variable ForwardIncremental(Variable input, GenerationCache cache, int layerIndex)
+    {
+        int newLen = input.Value.Shape[0];
+        int queryOffset = cache.Length;
+
+        var query = SplitHeads(input.MatMul(QueryWeight), newLen);
+        var newKey = SplitHeads(input.MatMul(KeyWeight), newLen);
+        var newValue = SplitHeads(input.MatMul(ValueWeight), newLen);
+
+        var cachedKey = cache.GetKey(layerIndex);
+        var cachedValue = cache.GetValue(layerIndex);
+        var fullKeyValue = cachedKey is null ? newKey.Value : cachedKey.Concat(newKey.Value, axis: 1);
+        var fullValueValue = cachedValue is null ? newValue.Value : cachedValue.Concat(newValue.Value, axis: 1);
+        cache.SetLayer(layerIndex, fullKeyValue, fullValueValue);
+
+        var attended = ScaledDotProductAttention.Compute(query, new Variable(fullKeyValue), new Variable(fullValueValue), Causal, queryOffset);
+
+        var merged = CombineHeads(attended, newLen);
+        return merged.MatMul(OutputWeight);
+    }
+
     public IReadOnlyList<Variable> Parameters() => [QueryWeight, KeyWeight, ValueWeight, OutputWeight];
 
     /// <summary>[seqLen, embeddingDim] -> [numHeads, seqLen, headDim], so batched matmul treats heads as independent batches.</summary>

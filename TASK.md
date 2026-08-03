@@ -451,7 +451,7 @@ end rather than re-numbered into size order).
   updated in place).
   Depends on: TASK-011
 
-- [ ] TASK-020: KV-cache for generation - the largest of these four, a
+- [x] TASK-020: KV-cache for generation - the largest of these four, a
   real architecture addition rather than a small patch. Needs a stateful
   "generation session" concept holding cached K/V per layer, a modified
   single-token forward path threaded through `MultiHeadAttention`,
@@ -463,6 +463,35 @@ end rather than re-numbered into size order).
   must be *exactly* the same as today's non-cached output for the same
   token sequence, at every step, not just "plausibly similar" - test by
   comparing the two paths directly, not only by inspecting generated text.
+  Done: new `Model.GenerationCache` (plain `Tensor`, not `Variable` - a
+  generation session never backpropagates) holds each layer's cached
+  Key/Value; `MultiHeadAttention.ForwardIncremental` computes Q/K/V for
+  only the *new* tokens, appends the new K/V onto the cache via a new
+  `Tensor.Concat` (added since nothing like it existed - a plain,
+  non-differentiable op, since the cache itself needs no gradient), and
+  attends the new Q against the full resulting K/V.
+  `ScaledDotProductAttention.Compute` gained a `queryOffset` parameter so
+  its causal mask can be *rectangular* (new-query-rows-by-all-keys, not
+  square) - query row i's real absolute position is `queryOffset + i`,
+  not i, once Q and K cover different lengths; `PositionalEmbedding.Forward`
+  gained an `offset` overload for the same reason (new tokens' absolute
+  positions don't start at 0). `TransformerBlock.ForwardIncremental` and
+  `GptModel.ForwardIncremental` thread the cache through; `FeedForward`/
+  `LayerNorm` need no cache-aware version since they're already
+  position-wise with no cross-sequence mixing. `Generation.TextGenerator`
+  now uses the cache for every step after the first; a sliding-window
+  step (context exceeding `MaxSequenceLength`) can't simply shift cached
+  positions, so it calls `GenerationCache.Reset()` and rebuilds from the
+  truncated window instead - the same one-step cost the old
+  always-recompute approach paid on *every* step, now confined to the
+  rare truncation steps. Correctness verified directly, per the task's
+  own bar: `GenerationCacheTests` compares `ForwardIncremental`'s logits
+  step-by-step against `Forward` recomputed from scratch on the same
+  growing context (exact match, not "plausibly similar"), and
+  `TextGeneratorTests` compares the public `GenerateTokenIds` API against
+  a from-scratch reference reimplementation of the old always-recompute
+  loop under greedy sampling (deterministic, so directly comparable).
+  Solution-wide branch coverage held (`Model` 96.5%, `Generation` 96.4%).
   Depends on: TASK-007, TASK-008, TASK-009, TASK-013
 
 - [x] TASK-021: CPU parallelism for `Tensor`'s hot ops - unlike TASK-015,
