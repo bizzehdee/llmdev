@@ -16,6 +16,26 @@ public sealed partial class Tensor : IDisposable
 {
     private readonly IFloatBuffer _buffer;
 
+    private static readonly AsyncLocal<TensorBackend> _backend = new();
+
+    /// <summary>
+    /// Which implementation hot ops (matmul) use for any Tensor code
+    /// running in the current async/logical-call context. Backed by
+    /// <see cref="AsyncLocal{T}"/> rather than a plain static field
+    /// deliberately: a plain static would leak between concurrently
+    /// running xUnit tests (and, once TASK-021 adds real parallelism,
+    /// between unrelated concurrent work in general) - AsyncLocal gives
+    /// each independent call chain its own value, defaulting to
+    /// <see cref="TensorBackend.Scalar"/> (0) if never set. A CLI sets
+    /// this once near startup (see Chat's --optimised flag) for
+    /// everything downstream of that point in the same call chain.
+    /// </summary>
+    public static TensorBackend Backend
+    {
+        get => _backend.Value;
+        set => _backend.Value = value;
+    }
+
     public int[] Shape { get; }
     public int[] Strides { get; }
     public int Length { get; }

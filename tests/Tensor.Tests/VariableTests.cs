@@ -115,28 +115,58 @@ public class VariableTests
         CheckGradient(vars => vars[0].Negate(), RandomVariable([2, 3]));
     }
 
-    [Fact]
-    public void MatMul_TwoDimensional_GradientMatchesFiniteDifference()
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_TwoDimensional_GradientMatchesFiniteDifference(TensorBackend backend)
     {
-        CheckGradient(
-            vars => vars[0].MatMul(vars[1]),
-            RandomVariable([2, 3]), RandomVariable([3, 4]));
+        Tensor.Backend = backend;
+        try
+        {
+            CheckGradient(
+                vars => vars[0].MatMul(vars[1]),
+                RandomVariable([2, 3]), RandomVariable([3, 4]));
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
-    [Fact]
-    public void MatMul_Batched_GradientMatchesFiniteDifference()
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_Batched_GradientMatchesFiniteDifference(TensorBackend backend)
     {
-        CheckGradient(
-            vars => vars[0].MatMul(vars[1]),
-            RandomVariable([2, 3, 4]), RandomVariable([2, 4, 5]));
+        Tensor.Backend = backend;
+        try
+        {
+            CheckGradient(
+                vars => vars[0].MatMul(vars[1]),
+                RandomVariable([2, 3, 4]), RandomVariable([2, 4, 5]));
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
-    [Fact]
-    public void MatMul_BroadcastBatch_GradientMatchesFiniteDifference()
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_BroadcastBatch_GradientMatchesFiniteDifference(TensorBackend backend)
     {
-        CheckGradient(
-            vars => vars[0].MatMul(vars[1]),
-            RandomVariable([2, 3, 4]), RandomVariable([4, 5]));
+        Tensor.Backend = backend;
+        try
+        {
+            CheckGradient(
+                vars => vars[0].MatMul(vars[1]),
+                RandomVariable([2, 3, 4]), RandomVariable([4, 5]));
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
     [Fact]

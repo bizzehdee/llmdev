@@ -1,4 +1,5 @@
 using Model;
+using Tensor;
 using Tokeniser;
 using Training;
 using Xunit;
@@ -79,6 +80,23 @@ public class ChatCliTests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Unrecognised or malformed option", stderr);
+    }
+
+    [Fact]
+    public void Run_OptimisedFlag_SelectsOptimisedTensorBackendAndStillProducesOutput()
+    {
+        try
+        {
+            var (exitCode, stdout, _) = Run("hello there\n/exit\n", CheckpointPath, VocabPath, "--optimised", "--max-new-tokens", "5");
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(">", stdout);
+            Assert.Equal(TensorBackend.Optimised, Tensor.Tensor.Backend);
+        }
+        finally
+        {
+            Tensor.Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
     [Fact]

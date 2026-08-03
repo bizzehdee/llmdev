@@ -177,47 +177,83 @@ public class TensorTests
         Assert.Throws<InvalidOperationException>(() => a.Add(b));
     }
 
-    [Fact]
-    public void MatMul_TwoByTwoKnownResult()
+    // MatMul is tested against both TensorBackend values throughout (TASK-015's
+    // own instruction: prove correctness by running the *existing* test suite
+    // against both backends, not a separate smaller one for the fast path).
+    // Tensor.Backend is AsyncLocal-backed specifically so this doesn't leak
+    // into other concurrently-running tests - see Tensor.cs's doc comment.
+
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_TwoByTwoKnownResult(TensorBackend backend)
     {
-        // [[1,2],[3,4]] x [[5,6],[7,8]] = [[19,22],[43,50]]
-        using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
-        using var b = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+        Tensor.Backend = backend;
+        try
+        {
+            // [[1,2],[3,4]] x [[5,6],[7,8]] = [[19,22],[43,50]]
+            using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+            using var b = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
 
-        using var result = a.MatMul(b);
+            using var result = a.MatMul(b);
 
-        Assert.Equal(new[] { 2, 2 }, result.Shape);
-        Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+            Assert.Equal(new[] { 2, 2 }, result.Shape);
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
-    [Fact]
-    public void MatMul_NonSquareShapes()
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_NonSquareShapes(TensorBackend backend)
     {
-        // (2x3) x (3x2) -> (2x2)
-        using var a = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
-        using var b = Tensor.FromValues([7, 8, 9, 10, 11, 12], [3, 2]);
+        Tensor.Backend = backend;
+        try
+        {
+            // (2x3) x (3x2) -> (2x2)
+            using var a = Tensor.FromValues([1, 2, 3, 4, 5, 6], [2, 3]);
+            using var b = Tensor.FromValues([7, 8, 9, 10, 11, 12], [3, 2]);
 
-        using var result = a.MatMul(b);
+            using var result = a.MatMul(b);
 
-        // row0 . col0 = 1*7+2*9+3*11 = 58 ; row0 . col1 = 1*8+2*10+3*12 = 64
-        // row1 . col0 = 4*7+5*9+6*11 = 139; row1 . col1 = 4*8+5*10+6*12 = 154
-        Assert.Equal(new[] { 2, 2 }, result.Shape);
-        Assert.Equal(new float[] { 58, 64, 139, 154 }, result.ToArray());
+            // row0 . col0 = 1*7+2*9+3*11 = 58 ; row0 . col1 = 1*8+2*10+3*12 = 64
+            // row1 . col0 = 4*7+5*9+6*11 = 139; row1 . col1 = 4*8+5*10+6*12 = 154
+            Assert.Equal(new[] { 2, 2 }, result.Shape);
+            Assert.Equal(new float[] { 58, 64, 139, 154 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
-    [Fact]
-    public void MatMul_BatchedAgainstSingleMatrixBroadcasts()
+    [Theory]
+    [InlineData(TensorBackend.Scalar)]
+    [InlineData(TensorBackend.Optimised)]
+    public void MatMul_BatchedAgainstSingleMatrixBroadcasts(TensorBackend backend)
     {
-        // batch of two (2x2) matrices x one (2x2) matrix -> batch of two (2x2) results
-        using var batch = Tensor.FromValues([1, 2, 3, 4, 1, 0, 0, 1], [2, 2, 2]);
-        using var shared = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+        Tensor.Backend = backend;
+        try
+        {
+            // batch of two (2x2) matrices x one (2x2) matrix -> batch of two (2x2) results
+            using var batch = Tensor.FromValues([1, 2, 3, 4, 1, 0, 0, 1], [2, 2, 2]);
+            using var shared = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
 
-        using var result = batch.MatMul(shared);
+            using var result = batch.MatMul(shared);
 
-        Assert.Equal(new[] { 2, 2, 2 }, result.Shape);
-        // batch[0] = [[1,2],[3,4]] x shared = [[19,22],[43,50]]
-        // batch[1] = identity x shared = shared = [[5,6],[7,8]]
-        Assert.Equal(new float[] { 19, 22, 43, 50, 5, 6, 7, 8 }, result.ToArray());
+            Assert.Equal(new[] { 2, 2, 2 }, result.Shape);
+            // batch[0] = [[1,2],[3,4]] x shared = [[19,22],[43,50]]
+            // batch[1] = identity x shared = shared = [[5,6],[7,8]]
+            Assert.Equal(new float[] { 19, 22, 43, 50, 5, 6, 7, 8 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
     [Fact]
@@ -367,6 +403,33 @@ public class TensorTests
         using var result = heap.Add(disk);
 
         Assert.Equal(new float[] { 2, 4, 6, 8 }, result.ToArray());
+    }
+
+    [Fact]
+    public void MatMul_DiskBackedOperand_FallsBackToScalarAndStaysCorrectUnderOptimisedBackend()
+    {
+        // TASK-015: a disk-backed operand must decline the optimised path
+        // (MappedFloatBuffer.TryGetSpan always returns false) and still
+        // produce the correct result via the scalar fallback, even though
+        // Backend is set to Optimised.
+        Tensor.Backend = TensorBackend.Optimised;
+        try
+        {
+            using var heap = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+            using var disk = Tensor.ZerosOnDisk([2, 2], ScratchDirectory);
+            disk[0, 0] = 5;
+            disk[0, 1] = 6;
+            disk[1, 0] = 7;
+            disk[1, 1] = 8;
+
+            using var result = heap.MatMul(disk);
+
+            Assert.Equal(new float[] { 19, 22, 43, 50 }, result.ToArray());
+        }
+        finally
+        {
+            Tensor.Backend = TensorBackend.Scalar;
+        }
     }
 
     [Fact]

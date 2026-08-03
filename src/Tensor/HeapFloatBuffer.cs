@@ -22,4 +22,10 @@ public sealed class HeapFloatBuffer : IFloatBuffer
     {
         // Nothing to release; the GC reclaims _data normally.
     }
+
+    public bool TryGetSpan(out Span<float> span)
+    {
+        span = _data;
+        return true;
+    }
 }

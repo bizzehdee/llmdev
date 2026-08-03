@@ -29,4 +29,19 @@ public sealed class MappedFloatBuffer : IFloatBuffer
     {
         _data.Dispose();
     }
+
+    /// <summary>
+    /// Always declines - a deliberate policy choice (PLAN.md/TASK-015),
+    /// not a technical limitation: the underlying mapped memory is a
+    /// stable native pointer, so a Span over it is technically possible,
+    /// but this buffer exists specifically for tensors deliberately routed
+    /// to disk because they're too large to want fully "hot" - opting
+    /// them into the optimised path's contiguous-access assumption would
+    /// undercut that choice. Callers fall back to the scalar path instead.
+    /// </summary>
+    public bool TryGetSpan(out Span<float> span)
+    {
+        span = default;
+        return false;
+    }
 }

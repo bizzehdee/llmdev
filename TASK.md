@@ -268,7 +268,7 @@ implementation, only offer a faster route through *later* stages (bigger
 training runs) once the earlier ones are understood. See PLAN.md stage 9
 for the full rationale and open design questions before starting this task.
 
-- [ ] TASK-015: `--optimised` opt-in fast path for `Tensor`'s hot ops
+- [x] TASK-015: `--optimised` opt-in fast path for `Tensor`'s hot ops
   (matmul first and foremost; elementwise ops as a stretch goal), backed by
   Math.NET Numerics and/or `System.Numerics.Tensors` only - no other
   library. Off by default - the existing hand-written scalar implementation
@@ -286,6 +286,31 @@ for the full rationale and open design questions before starting this task.
   finite-difference gradient checks in `Tensor.Tests`/`Model.Tests` - against
   both backends and getting equivalent results, not a separate smaller
   test suite scoped to just the fast path.
+  Done: chose `System.Numerics.Tensors` (`TensorPrimitives.Dot`) over
+  Math.NET - zero extra package-manager surface beyond the one NuGet
+  reference, and it's a direct SIMD analogue of the scalar dot-product
+  loop matmul already does, matching the "faster wrapper around code we
+  already have" framing. `IFloatBuffer.TryGetSpan` added so a buffer can
+  opt into (heap) or decline (disk-backed) the fast path per-tensor;
+  `TensorBackend` (`Scalar`/`Optimised`) selected process-wide via
+  `Tensor.Backend`, an `AsyncLocal<T>`-backed static (not a plain static,
+  to avoid state leaking between concurrently-running xUnit tests or,
+  later, real parallel work from TASK-021) defaulting to `Scalar`.
+  `Tensor.MatMul.cs` dispatches to the original scalar triple-loop
+  (renamed `MatMulScalar`) or `MatMulOptimised` when both operands can
+  hand out a contiguous span; `MatMulOptimised` transposes the right-hand
+  operand once (always yields a heap-backed, span-capable result via
+  `Zeros()`) so both operands' rows are contiguous, then calls
+  `TensorPrimitives.Dot` per output element instead of a scalar
+  accumulation loop. `src/Chat/ChatCli.cs` gained a `--optimised` flag
+  that sets `Tensor.Backend` before the conversation loop starts.
+  Verified per the task's own bar: the six existing `TensorTests.cs`
+  MatMul tests and the three `VariableTests.cs` MatMul gradient-check
+  tests were parametrised by `TensorBackend` (`[Theory]` +
+  `[InlineData]`) rather than duplicated, plus a new test proving a
+  disk-backed operand still falls back to the scalar path and stays
+  correct even with `Backend == Optimised`. Solution-wide branch coverage
+  held at 97.2% after the change (every production assembly still ≥90%).
   Depends on: TASK-003
 
 ## Instruction tuning

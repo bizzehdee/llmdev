@@ -1,5 +1,6 @@
 using Generation;
 using Model;
+using Tensor;
 using Tokeniser;
 using Training;
 
@@ -33,7 +34,7 @@ public static class ChatCli
     {
         if (args.Length < 2)
         {
-            stdout.WriteLine("Usage: Chat <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>] [--max-new-tokens <n>]");
+            stdout.WriteLine("Usage: Chat <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [--top-p <f>] [--max-new-tokens <n>] [--optimised]");
             stdout.WriteLine("Loads a trained model checkpoint and tokeniser vocabulary, then lets you converse with it turn by turn.");
             stdout.WriteLine($"Type {ExitCommand} (or send EOF, e.g. Ctrl+D) to leave.");
             stdout.WriteLine();
@@ -67,6 +68,15 @@ public static class ChatCli
                 case "--max-new-tokens" when i + 1 < args.Length && int.TryParse(args[i + 1], out int requestedMaxNewTokens):
                     maxNewTokens = requestedMaxNewTokens;
                     i++;
+                    break;
+                case "--optimised":
+                    // TASK-015: opt into the TensorPrimitives-backed matmul fast
+                    // path for everything downstream in this call chain (see
+                    // Tensor.Backend's doc comment for why AsyncLocal, not a
+                    // plain static). Always safe to select: ops that can't use
+                    // it (e.g. a disk-backed tensor) fall back to the scalar
+                    // implementation transparently.
+                    Tensor.Tensor.Backend = TensorBackend.Optimised;
                     break;
                 default:
                     stderr.WriteLine($"Unrecognised or malformed option: {args[i]}");
