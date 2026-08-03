@@ -199,18 +199,31 @@ forward pass, loss, backward pass, optimizer step, repeat.
 
 **Source files:** `src/Training/TokenCorpus.cs`, `src/Training/BatchSampler.cs`,
 `src/Training/CrossEntropyLoss.cs`, `src/Training/{SgdOptimizer,AdamWOptimizer}.cs`,
-`src/Training/ModelCheckpoint.cs`, `src/Training/Trainer.cs`.
+`src/Training/ModelCheckpoint.cs`, `src/Training/Trainer.cs`, `src/Pretrain/PretrainCli.cs`.
 
-**Run it:** see the [full worked example](#putting-it-together-training-and-generating-from-code)
-below — training isn't exposed as a CLI (there's no single obviously-right
-set of hyperparameters/corpus to hardcode into one), so it's driven from a
-short C# snippet instead.
+**Run it:**
 
 ```bash
+cd src/Pretrain
+dotnet run -- <vocab-path> <output-checkpoint-path> <corpus-file-or-directory> [file-or-directory ...]
+  [--embedding-dim <n>] [--layers <n>] [--heads <n>] [--context-length <n>]
+  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>]
+  [--scratch-dir <dir>] [--optimised]
+```
+
+Loads a vocabulary already trained via the [tokeniser CLI](#stage-1--tokeniser),
+bulk-encodes the corpus (stage 1's `EncodeBulk`, not `Encode` — the
+large-corpus path), trains a fresh `GptModel` from scratch, prints loss
+periodically, and saves a checkpoint — the same architecture/hyperparameter
+flags the [worked example](#putting-it-together-training-and-generating-from-code)
+below hardcodes, exposed as CLI flags with the same defaults instead.
+
+```bash
+cd tests/Pretrain.Tests && dotnet test
 cd tests/Training.Tests && dotnet test
 ```
 
-includes a genuine end-to-end proof: loss measurably drops over training
+both include genuine end-to-end proof: loss measurably drops over training
 steps on a small, deliberately repetitive corpus.
 
 ## Stage 7 — Generation
@@ -375,13 +388,13 @@ instruction/response pattern, mirroring stage 6's pretraining equivalent.
 
 ## Putting it together: training and generating from code
 
-There's a CLI for the tokeniser (stage 1) and the chat CLI (stage 8), but
-pretraining and instruction tuning (stages 6, 10) are library-only — no
-single hardcoded set of hyperparameters/corpus/dataset would be right for
-everyone. The example below walks through stages 2–7 (pretraining +
-generation); stage 10's fine-tuning loop looks the same shape, just with
-`SftDataset.Load` + `SftTrainer` in place of `TokenCorpus`/`BatchSampler` +
-`Trainer`.
+There's a CLI for the tokeniser (stage 1), pretraining (stage 6), and chat
+(stage 8) — instruction tuning (stage 10) is still library-only as of this
+writing. The example below walks through stages 2–7 (pretraining +
+generation) as a from-scratch C# snippet, for anyone who wants to see the
+pieces wired together directly rather than through the stage 6 CLI; stage
+10's fine-tuning loop looks the same shape, just with `SftDataset.Load` +
+`SftTrainer` in place of `TokenCorpus`/`BatchSampler` + `Trainer`.
 
 ```csharp
 using Model;
@@ -476,6 +489,7 @@ dotnet run
   response-masked), `SgdOptimizer`/`AdamWOptimizer`, `ModelCheckpoint`,
   `Trainer` (the pretraining loop), and `SftExample`/`SftDataset`/`SftTrainer`
   (instruction tuning).
+- `src/Pretrain/` — the pretraining CLI (`PretrainCli.cs`/`Program.cs`).
 - `src/Generation/` — `SamplingOptions`, `TokenSampler`, and
   `TextGenerator` (KV-cached autoregressive generation).
 - `src/Chat/` — the interactive chat CLI.

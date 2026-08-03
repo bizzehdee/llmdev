@@ -722,7 +722,7 @@ artifact should have a CLI to actually do so, the same way the tokeniser
 (TASK-001) and chat (TASK-014) do - pretraining and instruction tuning are
 currently library-only, runnable only by pasting a C# snippet.
 
-- [ ] TASK-025: Pretraining CLI - a new console entry point (mirroring
+- [x] TASK-025: Pretraining CLI - a new console entry point (mirroring
   `src/Tokeniser`'s `TokeniserCli`/`Program.cs` split, testable via
   `Run(args, stdout, stderr)`) that runs TASK-012's `Trainer` end to end:
   load a trained tokeniser vocab (`BpeTokeniser.Load`), bulk-encode one or
@@ -746,6 +746,28 @@ currently library-only, runnable only by pasting a C# snippet.
   runnable command, mirroring how stages 1/8 are documented) instead of
   only the current C#-snippet worked example - the lesson plan (TASK-023)
   should show the real command, not just point at library code.
+  Done: `src/Pretrain/PretrainCli.cs` (+ `Program.cs`, same
+  `Run(args, stdout, stderr)`-testable split as `TokeniserCli`/`ChatCli`).
+  Loads a vocab via `BpeTokeniser.Load`, expands corpus file/directory
+  positional args the same way `TokeniserCli` does (`*.txt` in a
+  directory), bulk-encodes via `EncodeBulk`, and feeds the result straight
+  into a **new** `TokenCorpus(EncodedCorpus, scratchDirectory)` constructor
+  overload - added to `Training/TokenCorpus.cs` as part of this task,
+  since it's exactly the resolution that class's own doc comment had been
+  pointing at since TASK-018 landed (streams token ids from one
+  disk-backed source into another, never materialising the whole corpus
+  as a single in-memory collection, unlike the existing
+  `IReadOnlyList<int>` constructor). Flags: `--embedding-dim`, `--layers`,
+  `--heads`, `--context-length`, `--steps`, `--batch-size`,
+  `--learning-rate`, `--weight-decay`, `--scratch-dir`, `--optimised`
+  (TASK-015), all defaulting to the same values the README's worked
+  example used to hardcode. Tested: usage/argument-error paths (mirroring
+  `ChatCli`'s), missing vocab/corpus files, an empty corpus directory, the
+  `--optimised` flag actually selecting `TensorBackend.Optimised`, and a
+  genuine end-to-end run - not just "didn't crash" - asserting loss
+  printed to stdout actually dropped and the saved checkpoint loads back
+  with the requested architecture. `Pretrain` reached 100% branch
+  coverage; solution-wide coverage held.
   Depends on: TASK-001, TASK-012, TASK-015, TASK-018
   Required by: TASK-026
 

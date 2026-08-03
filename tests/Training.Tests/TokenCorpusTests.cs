@@ -1,3 +1,4 @@
+using Tokeniser;
 using Training;
 using Xunit;
 
@@ -36,5 +37,30 @@ public class TokenCorpusTests
         using var corpus = new TokenCorpus([], ScratchDirectory);
 
         Assert.Equal(0, corpus.Length);
+    }
+
+    [Fact]
+    public void Constructor_FromEncodedCorpus_StreamsTokenIdsThrough()
+    {
+        var path = Path.Combine(ScratchDirectory, $"corpus-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(path, "the quick brown fox jumps over the lazy dog. ");
+        try
+        {
+            var tokeniser = new BpeTokeniser();
+            tokeniser.Train([path], targetVocabSize: 260, ScratchDirectory);
+
+            using var encoded = tokeniser.EncodeBulk([path], ScratchDirectory);
+            using var corpus = new TokenCorpus(encoded, ScratchDirectory);
+
+            Assert.Equal(encoded.Length, corpus.Length);
+            for (int i = 0; i < encoded.Length; i++)
+            {
+                Assert.Equal(encoded[i], corpus[i]);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }
