@@ -978,7 +978,7 @@ thousands of examples.
   first place. Solution-wide test suite: 396 passing; `Tokeniser` assembly
   at 95.7% branch coverage (`PreTokeniser` 100%, `BpeTokeniser` 98.8%).
 
-- [ ] TASK-030: Automatic epoch-based training for the SFT CLI - today
+- [x] TASK-030: Automatic epoch-based training for the SFT CLI - today
   `SftCli` takes a raw `--steps`/`--batch-size` pair with no relationship
   to dataset size, which the README's own stage 9 example works around
   manually (`--batch-size` set equal to the 6-example dataset size, so
@@ -1006,6 +1006,36 @@ thousands of examples.
   (not requiring the user to hand-tune `--batch-size` to the dataset size
   as README's stage 9 example currently has to).
   Depends on: TASK-016, TASK-026
+
+  **Done:** resolved the open design question up front - `--steps` stays
+  as a lower-level escape hatch (fixed count, sequential unshuffled order,
+  no epoch concept), mutually exclusive with the new `--epochs` (an error
+  if both are given). `SftTrainer` gained `RunEpochs(epochs, batchSize,
+  random, onStep)`: each epoch Fisher-Yates-shuffles a fresh index
+  permutation, then walks it in `batchSize`-sized slices (the final slice
+  of an epoch is smaller when dataset size isn't a multiple of batch size -
+  a new private `StepOn(exampleIndices)` helper, which both `Step` and
+  `RunEpochs` now build on, averages by the batch's *actual* size rather
+  than a fixed denominator so a short final batch's gradient scale is
+  still correct). `SftCli` defaults to `--epochs 3` (tuned for a real
+  dataset, not the tiny demo) with a `--batch-size` default of 8 -
+  independent of dataset size, unlike the demo's old hand-tuned `6`.
+  Updated README's stage 9 example to `--epochs 300` (no `--batch-size`
+  override needed - the demo's 6 examples are already smaller than the
+  default batch size of 8, so every epoch is naturally one full-batch
+  step, reproducing the old manually-tuned convergence without the CLI
+  ever needing to know the dataset size). Tested: `SftTrainerTests` proves
+  `RunEpochs` invokes `onStep` exactly `ceil(datasetSize/batchSize) *
+  epochs` times with correct (epoch, globalStep) pairs, handles a
+  non-evenly-dividing batch size without error, and drives loss down
+  substantially on a repetitive pattern; `SftCliTests` proves `--steps`
+  and `--epochs` together is a clear error, `--epochs` prints the derived
+  steps-per-epoch/total-steps, the no-flags default runs epoch-based
+  training successfully, and a genuine end-to-end `--epochs` run produces
+  a loadable checkpoint with dropped loss. All pre-existing `--steps`-based
+  tests pass unchanged (steps stays a fully backward-compatible path).
+  Solution-wide: 413 tests passing; `Sft` and `Training` both at 100%
+  branch coverage.
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

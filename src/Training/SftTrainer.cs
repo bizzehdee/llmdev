@@ -55,14 +55,33 @@ public sealed class SftTrainer
     /// </summary>
     public float Step(int batchSize, int startIndex)
     {
+        var indices = new int[batchSize];
+        for (int i = 0; i < batchSize; i++)
+        {
+            indices[i] = (startIndex + i) % _examples.Count;
+        }
+        return StepOn(indices);
+    }
+
+    /// <summary>
+    /// Runs one gradient-accumulated step over exactly the examples at
+    /// <paramref name="exampleIndices"/> (in the given order, no
+    /// wraparound) - the shared core both <see cref="Step"/> and
+    /// <see cref="RunEpochs"/> (TASK-030) build on, since an epoch's final
+    /// batch is often smaller than a full batch size and averaging by the
+    /// *actual* count in the batch (not a fixed denominator) is what makes
+    /// that batch's gradient scale correctly.
+    /// </summary>
+    private float StepOn(IReadOnlyList<int> exampleIndices)
+    {
         _optimizer.ZeroGrad();
 
         float totalLoss = 0f;
-        var inverseBatchSize = new Variable(TensorValue.FromValues([1f / batchSize], [1]));
+        var inverseBatchSize = new Variable(TensorValue.FromValues([1f / exampleIndices.Count], [1]));
 
-        for (int i = 0; i < batchSize; i++)
+        foreach (int index in exampleIndices)
         {
-            var example = _examples[(startIndex + i) % _examples.Count];
+            var example = _examples[index];
             var logits = _model.Forward(example.InputIds);
             var loss = CrossEntropyLoss.ComputeMasked(logits, example.TargetIds, example.ResponseMask);
             totalLoss += loss.Value.ToArray()[0];
@@ -72,7 +91,7 @@ public sealed class SftTrainer
         }
 
         _optimizer.Step();
-        return totalLoss / batchSize;
+        return totalLoss / exampleIndices.Count;
     }
 
     /// <summary>
@@ -93,6 +112,59 @@ public sealed class SftTrainer
             float loss = Step(batchSize, index);
             index = (index + batchSize) % _examples.Count;
             onStep?.Invoke(step, loss);
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="epochs"/> full, independently-shuffled passes
+    /// over the dataset (TASK-030) instead of a fixed step count the
+    /// caller has to size against dataset length themselves - each epoch
+    /// is <c>ceil(datasetSize / batchSize)</c> steps, so the total amount
+    /// of training scales automatically with how much data there is,
+    /// rather than requiring <see cref="Run"/>'s caller to already know
+    /// "enough steps" for their dataset. Shuffling (a fresh
+    /// <see cref="Random"/>-driven permutation per epoch, Fisher-Yates) is
+    /// genuinely new here - <see cref="Run"/>'s sequential wraparound order
+    /// is deterministic and fine for a tiny, curated demo dataset, but a
+    /// real dataset of hundreds or thousands of examples benefits from not
+    /// seeing the same fixed example order every epoch. The final batch of
+    /// an epoch is often smaller than a full batch (when dataset size
+    /// isn't a multiple of batchSize) - <see cref="StepOn"/> averages by
+    /// that batch's actual size, not a fixed denominator, so its gradient
+    /// scale is still correct. <paramref name="onStep"/>, if given, is
+    /// invoked after each step with (epochIndex, globalStepIndex,
+    /// averageLoss).
+    /// </summary>
+    public void RunEpochs(int epochs, int batchSize, Random random, Action<int, int, float>? onStep = null)
+    {
+        int globalStep = 0;
+        var order = new int[_examples.Count];
+        for (int i = 0; i < order.Length; i++)
+        {
+            order[i] = i;
+        }
+
+        for (int epoch = 0; epoch < epochs; epoch++)
+        {
+            Shuffle(order, random);
+
+            for (int start = 0; start < order.Length; start += batchSize)
+            {
+                int count = Math.Min(batchSize, order.Length - start);
+                var batchIndices = new ArraySegment<int>(order, start, count);
+                float loss = StepOn(batchIndices);
+                onStep?.Invoke(epoch, globalStep, loss);
+                globalStep++;
+            }
+        }
+    }
+
+    private static void Shuffle(int[] values, Random random)
+    {
+        for (int i = values.Length - 1; i > 0; i--)
+        {
+            int j = random.Next(i + 1);
+            (values[i], values[j]) = (values[j], values[i]);
         }
     }
 }

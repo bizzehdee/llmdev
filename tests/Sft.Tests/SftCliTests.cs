@@ -160,6 +160,64 @@ public class SftCliTests
         Assert.Equal(baseModel.EmbeddingDim, tunedModel.EmbeddingDim);
     }
 
+    // TASK-030: epoch-based training.
+
+    [Fact]
+    public void Run_StepsAndEpochsTogether_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run(BaseCheckpointPath, VocabPath, DatasetPath, "out.checkpoint", "--steps", "5", "--epochs", "2");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Specify either --steps or --epochs, not both", stderr);
+    }
+
+    [Fact]
+    public void Run_EpochsFlag_PrintsStepsPerEpochAndTotalSteps()
+    {
+        string outputCheckpointPath = Path.Combine(ScratchDirectory, $"tuned-{Guid.NewGuid():N}.checkpoint");
+
+        var (exitCode, stdout, _) = Run(
+            BaseCheckpointPath, VocabPath, DatasetPath, outputCheckpointPath,
+            "--epochs", "2", "--batch-size", "1");
+
+        Assert.Equal(0, exitCode);
+        // 1 example, batch size 1 -> 1 step/epoch, 2 epochs -> 2 steps total.
+        Assert.Contains("for 2 epoch(s) (1 step(s)/epoch, 2 step(s) total, batch size 1)", stdout);
+    }
+
+    [Fact]
+    public void Run_NoStepsOrEpochsFlag_DefaultsToEpochBasedTraining()
+    {
+        string outputCheckpointPath = Path.Combine(ScratchDirectory, $"tuned-{Guid.NewGuid():N}.checkpoint");
+
+        var (exitCode, stdout, _) = Run(BaseCheckpointPath, VocabPath, DatasetPath, outputCheckpointPath);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("epoch(s)", stdout);
+        Assert.True(File.Exists(outputCheckpointPath));
+    }
+
+    [Fact]
+    public void Run_EpochsEndToEnd_ProducesADifferentLoadableCheckpointWithDecreasedLoss()
+    {
+        string outputCheckpointPath = Path.Combine(ScratchDirectory, $"tuned-{Guid.NewGuid():N}.checkpoint");
+
+        var (exitCode, stdout, stderr) = Run(
+            BaseCheckpointPath, VocabPath, DatasetPath, outputCheckpointPath,
+            "--epochs", "60", "--batch-size", "1", "--learning-rate", "0.01", "--weight-decay", "0");
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(stderr);
+        Assert.True(File.Exists(outputCheckpointPath), "Expected a fine-tuned checkpoint file to be written.");
+
+        var losses = stdout.Split('\n')
+            .Where(line => line.StartsWith("step ", StringComparison.Ordinal))
+            .Select(line => float.Parse(line.Split("loss ")[1]))
+            .ToList();
+        Assert.True(losses.Count >= 2, "Expected at least a first and last loss to be printed.");
+        Assert.True(losses[^1] < losses[0], $"Expected loss to drop: {losses[0]} -> {losses[^1]}.");
+    }
+
     [Fact]
     public void Run_OptimisedFlag_SelectsOptimisedTensorBackend()
     {

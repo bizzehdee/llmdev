@@ -452,25 +452,39 @@ is a small, ready-to-use starter file - one JSON object per line:
 ```bash
 cd src/Sft
 dotnet run -- <base-checkpoint-path> <vocab-path> <dataset-path> <output-checkpoint-path>
-  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]
+  [--epochs <n> | --steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]
 ```
+
+**`--epochs`** (default 3, TASK-030) is the primary way to size a training
+run: each epoch is one full, freshly-shuffled pass over the dataset
+(`ceil(datasetSize / batchSize)` steps), so the total amount of training
+scales with dataset size automatically instead of you having to
+hand-compute a step count against a dataset you may not have measured yet.
+`--steps` still exists as a lower-level escape hatch - a fixed step count,
+sequential (unshuffled) example order, no notion of an epoch - but the two
+are mutually exclusive; specifying both is an error. `--batch-size`
+defaults to 8, a fixed number independent of dataset size (unlike the
+demo below, which used to need `--batch-size` hand-set to match its
+6-example dataset exactly).
 
 Example, fine-tuning the checkpoint stage 6 produced above on
 [`examples/sft-example.jsonl`](examples/sft-example.jsonl) (real command,
-real output - `--batch-size` here equals the dataset size, i.e. every
-example contributes to every step's gradient, which converges far more
-smoothly on a dataset this small than a smaller batch size did when we
-first tried this):
+real output). The 6-example demo dataset is far smaller than
+`--batch-size`'s default of 8, so every epoch here is one full-batch step
+over all 6 examples - `--epochs 300` reproduces the same "every example,
+every step" convergence the demo used to get by manually setting
+`--batch-size` to the dataset size, without the CLI needing to know the
+dataset size at all:
 
 ```text
 $ dotnet run -- model.checkpoint vocab.bpe examples/sft-example.jsonl model-sft.checkpoint \
-    --steps 300 --batch-size 6 --learning-rate 0.0001
+    --epochs 300 --learning-rate 0.0001
 
-Fine-tuning on 6 example(s) for 300 steps (batch size 6)...
-step 0: loss 3.1110
-step 100: loss 1.1247
-step 200: loss 0.8657
-step 299: loss 0.7564
+Fine-tuning on 6 example(s) for 300 epoch(s) (1 step(s)/epoch, 300 step(s) total, batch size 8)...
+step 0: loss 3.9941
+step 100: loss 1.1884
+step 200: loss 0.7917
+step 299: loss 0.6425
 Saved fine-tuned checkpoint to model-sft.checkpoint.
 ```
 
@@ -485,7 +499,8 @@ cd tests/Training.Tests && dotnet test
 ```
 
 includes an end-to-end proof that loss actually drops on a small repetitive
-instruction/response pattern, mirroring stage 6's pretraining equivalent.
+instruction/response pattern, mirroring stage 6's pretraining equivalent,
+for both `--epochs` and `--steps`.
 
 ## Stage 10 — Interactive chat CLI
 
@@ -839,7 +854,13 @@ section's own headline finding: `File.ReadAllText` no longer holds an
 entire corpus file on the unreclaimable managed heap during tokeniser
 training/bulk-encoding (see the footprint section above for the
 re-measured numbers and what, honestly, still isn't perfectly flat and
-why). One genuinely open gap remains, tracked as TASK-030: the SFT CLI's
-`--steps`/`--batch-size` flags don't yet scale gracefully to a real dataset
-of hundreds or thousands of examples the way they do to the 6-example
-demo.
+why). TASK-030 closed the last open gap: the SFT CLI's `--epochs` flag
+(default 3) sizes a training run from dataset size automatically - each
+epoch a freshly shuffled full pass - instead of requiring `--batch-size`
+hand-tuned to match the dataset the way the 6-example demo used to need;
+`--steps` remains as a lower-level, unshuffled escape hatch, mutually
+exclusive with `--epochs`.
+
+No open gaps remain from this line of follow-up work - see TASK.md for the
+full task-by-task history if scaling to a genuinely large corpus/dataset
+(hundreds of MB, thousands of examples) raises something new.

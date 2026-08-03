@@ -312,9 +312,14 @@ theoretical:
   existing 16-bytes-per-input-byte scratch formula), which is reclaimable
   by the OS unlike the old heap string, not a leftover version of the same
   bug.
-- **The SFT CLI's `--steps`/`--batch-size` don't scale to a real dataset.**
-  The 6-example demo works by setting `--batch-size` equal to the dataset
+- **The SFT CLI's `--steps`/`--batch-size` didn't scale to a real dataset.**
+  The 6-example demo worked by setting `--batch-size` equal to the dataset
   size; a dataset of hundreds or thousands of (instruction, response)
-  pairs needs actual epoch-based training (shuffled passes over the whole
+  pairs needed actual epoch-based training (shuffled passes over the whole
   dataset) instead of a fixed step count the user has to hand-compute
-  against dataset size themselves. → TASK-030.
+  against dataset size themselves. → TASK-030, now fixed: `--epochs`
+  (default 3) is the primary way to size a run, each epoch a freshly
+  shuffled full pass (`SftTrainer.RunEpochs`); `--steps` stays as a
+  lower-level, unshuffled escape hatch, mutually exclusive with `--epochs`.
+  The demo now uses `--epochs 300` with the new fixed default batch size
+  (8) instead of hand-setting `--batch-size` to match the dataset size.

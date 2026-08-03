@@ -22,17 +22,28 @@ namespace Sft;
 /// </summary>
 public static class SftCli
 {
+    // TASK-030: tuned for a real few-hundred-to-few-thousand-example
+    // dataset, not the README's 6-example demo (which needs a far larger
+    // --epochs, since one shuffled pass over 6 examples is barely any
+    // training at all).
+    private const int DefaultEpochs = 3;
+
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
     {
         if (args.Length < 4)
         {
             stdout.WriteLine("Usage: Sft <base-checkpoint-path> <vocab-path> <dataset-path> <output-checkpoint-path>");
-            stdout.WriteLine("  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]");
+            stdout.WriteLine("  [--epochs <n> | --steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]");
             stdout.WriteLine();
             stdout.WriteLine("Fine-tunes a pretrained GptModel checkpoint on an (instruction, response) JSON Lines");
             stdout.WriteLine("dataset (one {\"instruction\": \"...\", \"response\": \"...\"} object per line), with the");
             stdout.WriteLine("loss restricted to response tokens only, and saves the result to a separate checkpoint -");
             stdout.WriteLine("the base checkpoint is never overwritten.");
+            stdout.WriteLine();
+            stdout.WriteLine("--epochs (default 3) runs that many full, shuffled passes over the dataset - the number");
+            stdout.WriteLine("of steps scales with dataset size automatically. --steps is a lower-level escape hatch:");
+            stdout.WriteLine("a fixed step count, sequential (unshuffled) example order, no notion of an epoch. Only");
+            stdout.WriteLine("one of the two may be given.");
             return 1;
         }
 
@@ -44,7 +55,9 @@ public static class SftCli
         // A tenth of Pretrain's 3e-4 default, per TASK-016's own guidance
         // that SFT conventionally uses a smaller learning rate than
         // pretraining.
-        int steps = 500, batchSize = 4;
+        int? steps = null;
+        int? epochs = null;
+        int batchSize = 8;
         float learningRate = 3e-5f, weightDecay = 0.01f;
         bool optimised = false;
 
@@ -54,6 +67,10 @@ public static class SftCli
             {
                 case "--steps" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedSteps):
                     steps = parsedSteps;
+                    i++;
+                    break;
+                case "--epochs" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedEpochs):
+                    epochs = parsedEpochs;
                     i++;
                     break;
                 case "--batch-size" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedBatchSize):
@@ -75,6 +92,12 @@ public static class SftCli
                     stderr.WriteLine($"Unrecognised or malformed option: {args[i]}");
                     return 1;
             }
+        }
+
+        if (steps.HasValue && epochs.HasValue)
+        {
+            stderr.WriteLine("Specify either --steps or --epochs, not both.");
+            return 1;
         }
 
         if (string.Equals(Path.GetFullPath(outputCheckpointPath), Path.GetFullPath(baseCheckpointPath), StringComparison.Ordinal))
@@ -119,18 +142,37 @@ public static class SftCli
             Tensor.Tensor.Backend = TensorBackend.Optimised;
         }
 
-        stdout.WriteLine($"Fine-tuning on {examples.Count} example(s) for {steps} steps (batch size {batchSize})...");
-
         var optimizer = new AdamWOptimizer(model.Parameters(), learningRate: learningRate, weightDecay: weightDecay);
         var trainer = new SftTrainer(model, examples, optimizer);
 
-        trainer.Run(steps, batchSize, onStep: (step, loss) =>
+        if (steps.HasValue)
         {
-            if (step % 100 == 0 || step == steps - 1)
+            stdout.WriteLine($"Fine-tuning on {examples.Count} example(s) for {steps} steps (batch size {batchSize})...");
+
+            trainer.Run(steps.Value, batchSize, onStep: (step, loss) =>
             {
-                stdout.WriteLine($"step {step}: loss {loss:F4}");
-            }
-        });
+                if (step % 100 == 0 || step == steps.Value - 1)
+                {
+                    stdout.WriteLine($"step {step}: loss {loss:F4}");
+                }
+            });
+        }
+        else
+        {
+            int epochCount = epochs ?? DefaultEpochs;
+            int stepsPerEpoch = (examples.Count + batchSize - 1) / batchSize;
+            int totalSteps = stepsPerEpoch * epochCount;
+            stdout.WriteLine($"Fine-tuning on {examples.Count} example(s) for {epochCount} epoch(s) " +
+                $"({stepsPerEpoch} step(s)/epoch, {totalSteps} step(s) total, batch size {batchSize})...");
+
+            trainer.RunEpochs(epochCount, batchSize, new Random(), onStep: (epoch, globalStep, loss) =>
+            {
+                if (globalStep % 100 == 0 || globalStep == totalSteps - 1)
+                {
+                    stdout.WriteLine($"step {globalStep}: loss {loss:F4}");
+                }
+            });
+        }
 
         ModelCheckpoint.Save(model, outputCheckpointPath);
         stdout.WriteLine($"Saved fine-tuned checkpoint to {outputCheckpointPath}.");
