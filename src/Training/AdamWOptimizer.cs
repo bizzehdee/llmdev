@@ -11,12 +11,18 @@ namespace Training;
 /// gradient instead behaves subtly differently once you're also adapting
 /// the learning rate per-parameter, which is the whole reason AdamW exists).
 ///
-/// Per-parameter moment estimates are plain heap tensors for now, same
-/// size as the parameter itself (so this optimizer's own state is ~2x the
-/// model's parameter count) - TASK-012's job to decide whether that needs
-/// disk-backing once model size makes it non-trivial (see PLAN.md/TASK.md).
+/// Per-parameter moment estimates default to plain heap tensors, same size
+/// as the parameter itself (so this optimizer's own state is ~2x the
+/// model's parameter count). TASK-019: pass <c>useDiskBackedState</c> to
+/// back them with <see cref="TensorValue.ZerosOnDisk"/> instead, mirroring
+/// <c>MappedArray&lt;T&gt;</c>'s scratch-file pattern - worth it once a
+/// model's parameter count makes 2x its size in RAM matter, not by
+/// default (nothing built in this project so far has been that large).
+/// Deliberately lower priority than TASK-017/018/020: cheap to build when
+/// the time comes, not worth speculatively building ahead of an actual
+/// need.
 /// </summary>
-public sealed class AdamWOptimizer : IOptimizer
+public sealed class AdamWOptimizer : IOptimizer, IDisposable
 {
     private readonly IReadOnlyList<Variable> _parameters;
     private readonly float _learningRate;
@@ -24,23 +30,30 @@ public sealed class AdamWOptimizer : IOptimizer
     private readonly float _beta2;
     private readonly float _epsilon;
     private readonly float _weightDecay;
+    private readonly bool _useDiskBackedState;
     private readonly Dictionary<Variable, TensorValue> _firstMoment = new();
     private readonly Dictionary<Variable, TensorValue> _secondMoment = new();
     private int _step;
 
-    public AdamWOptimizer(IReadOnlyList<Variable> parameters, float learningRate = 1e-3f, float beta1 = 0.9f, float beta2 = 0.999f, float epsilon = 1e-8f, float weightDecay = 0.01f)
+    public AdamWOptimizer(IReadOnlyList<Variable> parameters, float learningRate = 1e-3f, float beta1 = 0.9f, float beta2 = 0.999f, float epsilon = 1e-8f, float weightDecay = 0.01f, bool useDiskBackedState = false, string? scratchDirectory = null)
     {
+        if (useDiskBackedState && string.IsNullOrEmpty(scratchDirectory))
+        {
+            throw new ArgumentException("scratchDirectory is required when useDiskBackedState is true.", nameof(scratchDirectory));
+        }
+
         _parameters = parameters;
         _learningRate = learningRate;
         _beta1 = beta1;
         _beta2 = beta2;
         _epsilon = epsilon;
         _weightDecay = weightDecay;
+        _useDiskBackedState = useDiskBackedState;
 
         foreach (var parameter in parameters)
         {
-            _firstMoment[parameter] = TensorValue.Zeros(parameter.Value.Shape);
-            _secondMoment[parameter] = TensorValue.Zeros(parameter.Value.Shape);
+            _firstMoment[parameter] = useDiskBackedState ? TensorValue.ZerosOnDisk(parameter.Value.Shape, scratchDirectory!) : TensorValue.Zeros(parameter.Value.Shape);
+            _secondMoment[parameter] = useDiskBackedState ? TensorValue.ZerosOnDisk(parameter.Value.Shape, scratchDirectory!) : TensorValue.Zeros(parameter.Value.Shape);
         }
     }
 
@@ -55,13 +68,13 @@ public sealed class AdamWOptimizer : IOptimizer
         {
             var gradient = parameter.Gradient;
 
-            var m = _firstMoment[parameter].Scale(_beta1).Add(gradient.Scale(1f - _beta1));
-            var v = _secondMoment[parameter].Scale(_beta2).Add(gradient.Multiply(gradient).Scale(1f - _beta2));
-            _firstMoment[parameter] = m;
-            _secondMoment[parameter] = v;
+            var mComputed = _firstMoment[parameter].Scale(_beta1).Add(gradient.Scale(1f - _beta1));
+            var vComputed = _secondMoment[parameter].Scale(_beta2).Add(gradient.Multiply(gradient).Scale(1f - _beta2));
+            UpdateMoment(_firstMoment, parameter, mComputed);
+            UpdateMoment(_secondMoment, parameter, vComputed);
 
-            var mHat = m.Scale(1f / biasCorrection1);
-            var vHat = v.Scale(1f / biasCorrection2);
+            var mHat = _firstMoment[parameter].Scale(1f / biasCorrection1);
+            var vHat = _secondMoment[parameter].Scale(1f / biasCorrection2);
 
             var adaptiveStep = mHat.Divide(vHat.Sqrt().Add(epsilonTensor)).Scale(_learningRate);
             var decayStep = parameter.Value.Scale(_learningRate * _weightDecay);
@@ -70,11 +83,54 @@ public sealed class AdamWOptimizer : IOptimizer
         }
     }
 
+    /// <summary>
+    /// Heap-backed state (the default) simply swaps in the freshly computed
+    /// moment tensor, same as before this task. Disk-backed state instead
+    /// copies the computed values into the *existing* disk-backed tensor
+    /// and disposes the transient heap-backed one - the persistent
+    /// disk-backed object is never replaced, so its scratch file is opened
+    /// once per parameter for the optimizer's whole lifetime rather than
+    /// once per Step() call (which would otherwise leak a scratch file per
+    /// parameter per step, since nothing else would ever Dispose the
+    /// replaced one).
+    /// </summary>
+    private void UpdateMoment(Dictionary<Variable, TensorValue> moments, Variable parameter, TensorValue computed)
+    {
+        if (_useDiskBackedState)
+        {
+            moments[parameter].LoadInPlace(computed.ToArray());
+            computed.Dispose();
+        }
+        else
+        {
+            moments[parameter] = computed;
+        }
+    }
+
     public void ZeroGrad()
     {
         foreach (var parameter in _parameters)
         {
             parameter.ZeroGrad();
+        }
+    }
+
+    /// <summary>
+    /// No-op for the default heap-backed state (heap tensors' Dispose is
+    /// itself a no-op). Required for disk-backed state, to release the
+    /// moment tensors' mapped scratch files - callers using
+    /// <c>useDiskBackedState: true</c> must Dispose this optimizer once
+    /// training finishes.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var moment in _firstMoment.Values)
+        {
+            moment.Dispose();
+        }
+        foreach (var moment in _secondMoment.Values)
+        {
+            moment.Dispose();
         }
     }
 }

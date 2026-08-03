@@ -6,6 +6,13 @@ namespace Training.Tests;
 
 public class OptimizerTests
 {
+    private static readonly string ScratchDirectory = Path.Combine(Path.GetTempPath(), "training-tests-scratch");
+
+    static OptimizerTests()
+    {
+        Directory.CreateDirectory(ScratchDirectory);
+    }
+
     [Fact]
     public void Sgd_Step_MovesParameterByLearningRateTimesGradient()
     {
@@ -120,6 +127,54 @@ public class OptimizerTests
 
         Assert.True(a.Value.ToArray()[0] < 1f, "Expected a positive gradient to decrease its parameter.");
         Assert.True(b.Value.ToArray()[0] > 1f, "Expected a negative gradient to increase its parameter.");
+    }
+
+    [Fact]
+    public void AdamW_DiskBackedState_MatchesHandComputedUpdate()
+    {
+        // TASK-019: the disk-backed path must produce numerically identical
+        // updates to the default heap-backed path - same closed-form first
+        // step as AdamW_FirstStep_MatchesHandComputedUpdate.
+        const float lr = 0.1f, weightDecay = 0.01f, eps = 1e-8f, g = 4f, w0 = 10f;
+        var parameter = new Variable(TensorValue.FromValues([w0], [1]));
+        parameter.Backward(TensorValue.FromValues([g], [1]));
+        using var adamW = new AdamWOptimizer([parameter], learningRate: lr, weightDecay: weightDecay, epsilon: eps, useDiskBackedState: true, scratchDirectory: ScratchDirectory);
+
+        adamW.Step();
+
+        float expected = w0 - lr * (g / (MathF.Abs(g) + eps) + weightDecay * w0);
+        Assert.Equal(expected, parameter.Value.ToArray()[0], precision: 4);
+    }
+
+    [Fact]
+    public void AdamW_DiskBackedState_MinimisesASimpleQuadraticAcrossManySteps()
+    {
+        // Runs enough steps that a scratch-file leak (a new mapped file per
+        // step instead of updating the persistent one in place) would be
+        // obvious as an exception (running out of file descriptors) well
+        // before this many iterations, not just a performance concern.
+        var x = new Variable(TensorValue.FromValues([0f], [1]));
+        var target = new Variable(TensorValue.FromValues([5f], [1]));
+        using var adamW = new AdamWOptimizer([x], learningRate: 0.2f, weightDecay: 0f, useDiskBackedState: true, scratchDirectory: ScratchDirectory);
+
+        for (int step = 0; step < 200; step++)
+        {
+            adamW.ZeroGrad();
+            var diff = x.Subtract(target);
+            var loss = diff.Multiply(diff);
+            loss.Backward();
+            adamW.Step();
+        }
+
+        Assert.Equal(5f, x.Value.ToArray()[0], precision: 1);
+    }
+
+    [Fact]
+    public void AdamW_DiskBackedStateWithoutScratchDirectory_Throws()
+    {
+        var parameter = new Variable(TensorValue.FromValues([1f], [1]));
+
+        Assert.Throws<ArgumentException>(() => new AdamWOptimizer([parameter], useDiskBackedState: true));
     }
 
     [Fact]

@@ -425,7 +425,7 @@ end rather than re-numbered into size order).
   non-merging, empty input, and `EncodedCorpus`'s out-of-range indexer).
   Depends on: TASK-002
 
-- [ ] TASK-019: Optional disk-backed AdamW moment estimates - a
+- [x] TASK-019: Optional disk-backed AdamW moment estimates - a
   constructor flag (e.g. `useDiskBackedState` + a scratch directory) on
   `AdamWOptimizer` backing `m`/`v` with `Tensor.ZerosOnDisk` instead of
   `Zeros`, mirroring the existing `MappedArray<T>` pattern. Deliberately
@@ -433,6 +433,22 @@ end rather than re-numbered into size order).
   but nothing built in this project so far has been large enough to need
   it - build this when a real model size makes it matter, not
   speculatively ahead of that.
+  Done: `AdamWOptimizer` takes `useDiskBackedState` + `scratchDirectory`
+  (throws `ArgumentException` if the flag is set without a directory).
+  Disk-backed moment tensors are allocated once at construction and
+  updated *in place* every `Step()` (`LoadInPlace` copies the freshly
+  computed heap-backed values in, then disposes the transient) rather
+  than replaced - replacing them the way the heap-backed default does
+  would leak one scratch file per parameter per step, since nothing else
+  would ever `Dispose` the one being replaced. `AdamWOptimizer` now
+  implements `IDisposable` (a no-op for the heap-backed default, since
+  `HeapFloatBuffer.Dispose` already is one) so disk-backed callers can
+  release the moment tensors' mapped files once training finishes.
+  Verified the disk-backed path is numerically identical to heap-backed
+  (same closed-form first-step update, and a 200-step convergence test
+  run specifically to catch a scratch-file leak - it would exhaust file
+  descriptors well before 200 steps if moments were replaced instead of
+  updated in place).
   Depends on: TASK-011
 
 - [ ] TASK-020: KV-cache for generation - the largest of these four, a
