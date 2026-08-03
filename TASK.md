@@ -1077,7 +1077,7 @@ CLI/demo integration.
   unavailable - do not skip or hardcode-pass this case just because CI
   itself may lack a GPU.
   Depends on: TASK-015
-  Required by: TASK-032
+  Required by: TASK-032, TASK-034
 
   **Done:** kept ILGPU's `Context`/`Accelerator` lifetime management
   inside `Tensor` itself (a new `GpuContext` static class) rather than a
@@ -1208,6 +1208,7 @@ CLI/demo integration.
   Update PLAN.md's "Known limitations / deferred" section once done to
   reflect single-GPU execution as delivered, not just planned.
   Depends on: TASK-025, TASK-032
+  Required by: TASK-036
 
   **Done:** resolved the flag question up front - `--gpu` and `--optimised`
   select different `TensorBackend` values and are mutually exclusive (an
@@ -1266,6 +1267,98 @@ CLI/demo integration.
   "genuine GPU selected" success path after, without being touched.
   Solution-wide: 435 tests passing; `Pretrain.PretrainCli` at 100% branch
   coverage.
+
+## Device-resident GPU tensors
+
+Flagged at the user's request once TASK-033's real-hardware wall-clock
+numbers came back roughly even with the CPU paths instead of a clear GPU
+win. Root-caused, not assumed: it isn't disk-backed storage (`MatMulGpu`
+already declines that the same way `--optimised` does) - it's that today's
+`MatMulGpu` allocates fresh device buffers, copies host→device, runs the
+kernel, copies device→host, and frees those buffers *on every single
+matmul call*, instead of keeping a tensor resident in VRAM across a whole
+forward/backward pass. At this project's toy model sizes, that per-call
+allocate/transfer/sync overhead dominates the (tiny) actual compute each
+matmul does, leaving no room for GPU parallelism to pay for itself. This
+is a real architecture change - a genuinely new storage location for
+`Tensor`, not a small patch to `MatMulGpu` - so it's broken into ordered
+tasks: storage plumbing first, then chaining ops on-device, then wiring
+that through an actual training run.
+
+- [ ] TASK-034: Device-resident `IFloatBuffer` for GPU tensors - the
+  foundational storage piece, no op changes yet. A new implementation
+  (e.g. `GpuFloatBuffer`) backed by an ILGPU device memory buffer
+  (`MemoryBuffer1D<float, Stride1D.Dense>`) whose lifetime spans the
+  `Tensor` that owns it, not one op call - a third storage location
+  alongside `HeapFloatBuffer`/`MappedFloatBuffer`, tied to
+  `GpuContext.GetAccelerator`'s accelerator. Needs a `Tensor.ZerosOnGpu`
+  (or similar) constructor mirroring `Zeros`/`ZerosOnDisk`, and a way to
+  move an existing heap-backed `Tensor`'s data onto the device (one
+  explicit host→device copy, not per-op). The indexer (`this[int]` get/set
+  on `IFloatBuffer`) will be the awkward part: per-element access to a
+  device buffer either needs a per-call round-trip (correct but defeats
+  the point if used in a hot loop - acceptable for this task, since
+  nothing in the hot path should be calling the indexer once TASK-035
+  lands) or must be explicitly documented as slow/for-debugging-and-tests
+  only, not silently fast. `TryGetSpan` should decline (`false`) for this
+  buffer kind the same way `MappedFloatBuffer` does today - a device
+  buffer has no host-addressable span, so `MatMulOptimised`'s SIMD path
+  must keep falling back to scalar for it, same as it already does for
+  disk-backed tensors. Test: round-tripping data onto a device-resident
+  tensor and back reproduces it exactly; the indexer and `TryGetSpan`
+  behave as documented; existing `MatMul`/elementwise ops correctly
+  decline to use their fast paths against a device-resident operand
+  (falling back to scalar) since this task doesn't teach them about it
+  yet - that's TASK-035.
+  Depends on: TASK-031
+  Required by: TASK-035
+
+- [ ] TASK-035: Chain matmul (and the other ops in a transformer block's
+  hot path - elementwise add/multiply for bias and residual connections,
+  layernorm, activations) on-device without a host round-trip between
+  them, when their operands are already device-resident. This is where
+  the actual performance this whole line of work is chasing comes from:
+  today's `MatMulGpu` copies its result back to a heap-backed `Tensor`
+  immediately (see its own code), so even two GPU matmuls in a row pay a
+  full round-trip between them. Needs `MatMulGpu` (and whichever other ops
+  this task brings on-device) to *produce* a device-resident result
+  directly when its inputs already are one, instead of always copying back
+  to host - open design question to resolve during implementation, not
+  assumed here: does *every* `Tensor` op need a device-resident code path,
+  or only the specific ops a transformer block's forward pass actually
+  uses (matmul, add, layernorm, an activation), falling back to a host
+  round-trip for anything else (rare ops, debugging, tests)? The narrower
+  option is very likely the right one, mirroring TASK-015/032's "only the
+  ops that matter" scoping, but must be stated as a deliberate choice, not
+  discovered as a gap later. Correctness bar unchanged: the same test
+  suite (including gradient checks) must still pass, now also proving a
+  *chain* of on-device ops (not just one op in isolation) matches the
+  scalar reference exactly.
+  Depends on: TASK-034
+  Required by: TASK-036
+
+- [ ] TASK-036: Wire a real device-resident training run end to end and
+  re-measure the stage 11 wall-clock comparison. Threads TASK-035's
+  on-device op chaining through an actual forward → loss → backward →
+  optimizer step, keeping parameters, activations, and gradients resident
+  on the GPU throughout a training step - pulling back to host only at
+  genuine boundaries (the scalar loss value for logging, periodic
+  checkpoint saves). Touches `Model`/`Training`: `GptModel.Parameters()`,
+  `AdamWOptimizer`'s per-parameter moment estimates, and the
+  `Variable`/autodiff graph's backward pass all need to work with
+  device-resident tensors for a whole step to actually stay on-device -
+  open design question, not assumed here: does the autodiff graph itself
+  need to become device-aware (gradients accumulate on-device too), or is
+  it acceptable for backward to stay host-side while only the forward
+  pass's matmuls run on-device (a smaller, faster-to-land first version,
+  with the full backward-on-device case as a further follow-up if the
+  first version's numbers justify it)? Resolve before implementation
+  starts. Re-run stage 11's exact wall-clock comparison (same toy model,
+  same corpus sizes) once done and update README.md/TASK.md with the new
+  numbers, stated plainly whichever way they land - if device-resident
+  chaining still doesn't beat the CPU paths at this project's toy scale,
+  that's as reportable a finding as a genuine speedup would be.
+  Depends on: TASK-035, TASK-033
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

@@ -297,6 +297,28 @@ rather than assuming it fits in RAM:
       "run the same math this project already understands, elsewhere,"
       not a general performance-library door.
 
+    **Follow-up, flagged at the user's request once the real-hardware
+    wall-clock numbers came back roughly even instead of a clear GPU win:**
+    the reason isn't disk-backed storage (the GPU path already declines
+    that the same way `--optimised` does) - it's that `MatMulGpu`
+    allocates fresh device buffers, copies host→device, runs the kernel,
+    copies device→host, and frees those buffers *on every single matmul
+    call*, rather than keeping a tensor resident in VRAM across a whole
+    forward/backward pass the way a real training framework does. At this
+    project's toy model sizes, that per-call allocate/transfer/sync
+    overhead dominates the actual (tiny) compute each matmul does, leaving
+    no room for GPU parallelism to pay for itself. Closing this gap is a
+    real architecture change, not a small patch - a genuinely new,
+    device-resident storage backend for `Tensor`/`IFloatBuffer` (a third
+    kind of buffer alongside heap/disk-backed, this time backed by an
+    ILGPU device memory buffer whose lifetime spans more than one op), and
+    ops beyond just matmul chained on-device without round-tripping to the
+    host in between. See TASK-034/035/036 for how this is broken down;
+    genuinely open design questions (how far the autodiff graph itself
+    should live on-device, whether every op needs a device-resident
+    variant or only the hot-path ones) are deliberately left to those
+    tasks, not pre-decided here.
+
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage
 (mirroring the numbered list above), each covering what problem that stage
