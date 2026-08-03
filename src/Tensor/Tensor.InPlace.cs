@@ -38,4 +38,55 @@ public sealed partial class Tensor
             _buffer[i] = values[i];
         }
     }
+
+    /// <summary>
+    /// TASK-036: moves this tensor's storage onto the GPU in place - the
+    /// same reason <see cref="SubtractInPlace"/>/<see cref="LoadInPlace"/>
+    /// mutate rather than return a new <see cref="Tensor"/>: a model
+    /// parameter (a <c>Variable</c>'s <c>Value</c>) can't simply be
+    /// reassigned once an optimizer or checkpoint loader already holds
+    /// that same <c>Variable</c> by reference. A no-op if already
+    /// device-resident. Disposes the old (heap or disk-backed) buffer once
+    /// its data has been copied, so this doesn't leak the tensor's
+    /// previous storage.
+    /// </summary>
+    public void MoveToGpuInPlace()
+    {
+        if (_buffer is GpuFloatBuffer)
+        {
+            return;
+        }
+
+        var gpuBuffer = new GpuFloatBuffer(Length);
+        if (_buffer.TryGetSpan(out var hostSpan))
+        {
+            gpuBuffer.CopyFromHost(hostSpan);
+        }
+        else
+        {
+            for (int i = 0; i < Length; i++)
+            {
+                gpuBuffer[i] = _buffer[i];
+            }
+        }
+
+        _buffer.Dispose();
+        _buffer = gpuBuffer;
+    }
+
+    /// <summary>The inverse of <see cref="MoveToGpuInPlace"/> - moves this tensor's storage back onto the heap in place. A no-op if not currently device-resident.</summary>
+    public void MoveToHostInPlace()
+    {
+        if (_buffer is not GpuFloatBuffer gpuBuffer)
+        {
+            return;
+        }
+
+        var heapBuffer = new HeapFloatBuffer(Length);
+        heapBuffer.TryGetSpan(out var hostSpan); // HeapFloatBuffer always supports this.
+        gpuBuffer.CopyToHost(hostSpan);
+
+        _buffer.Dispose();
+        _buffer = heapBuffer;
+    }
 }

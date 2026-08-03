@@ -239,4 +239,54 @@ public class PretrainCliTests
             Tensor.GpuContext.Shutdown();
         }
     }
+
+    // TASK-036: --gpu-resident-weights.
+
+    [Fact]
+    public void Run_GpuResidentWeightsWithoutGpuFlag_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run(VocabPath, "out.checkpoint", CorpusPath, "--gpu-resident-weights");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("--gpu-resident-weights only makes sense together with --gpu", stderr);
+    }
+
+    [Fact]
+    public void Run_GpuResidentWeightsFlag_TrainsCorrectlyWithParametersMovedOnToTheGpu()
+    {
+        // Deliberately the smallest fixture model/step count used anywhere
+        // in this file: --gpu-resident-weights moves every parameter's
+        // backward-pass Transpose (and the optimizer's per-parameter
+        // update) onto the slow, per-element GpuFloatBuffer indexer path
+        // (TASK-035 only taught matmul to avoid that, not backward or
+        // AdamW) - real, measured wall-clock during development showed
+        // this is dramatically slower, not faster, at this project's toy
+        // scale (see README.md stage 11). This test only needs to prove
+        // correctness, not speed, so it stays as small as the existing
+        // --gpu fixture already is.
+        string checkpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        try
+        {
+            var (exitCode, stdout, stderr) = Run(
+                VocabPath, checkpointPath, CorpusPath,
+                "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+                "--steps", "2", "--batch-size", "2", "--gpu", "--gpu-resident-weights");
+
+            Assert.Equal(0, exitCode);
+            Assert.Empty(stderr);
+            Assert.True(File.Exists(checkpointPath));
+
+            var losses = stdout.Split('\n')
+                .Where(line => line.StartsWith("step ", StringComparison.Ordinal))
+                .Select(line => float.Parse(line.Split("loss ")[1]))
+                .ToList();
+            Assert.Equal(2, losses.Count);
+            Assert.All(losses, loss => Assert.False(float.IsNaN(loss) || float.IsInfinity(loss)));
+        }
+        finally
+        {
+            Tensor.Tensor.Backend = Tensor.TensorBackend.Scalar;
+            Tensor.GpuContext.Shutdown();
+        }
+    }
 }

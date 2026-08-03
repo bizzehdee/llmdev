@@ -14,7 +14,7 @@ namespace Tensor;
 /// </summary>
 public sealed partial class Tensor : IDisposable
 {
-    private readonly IFloatBuffer _buffer;
+    private IFloatBuffer _buffer;
 
     private static readonly AsyncLocal<TensorBackend> _backend = new();
 

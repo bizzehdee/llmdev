@@ -29,7 +29,7 @@ public static class PretrainCli
             stdout.WriteLine("Usage: Pretrain <vocab-path> <output-checkpoint-path> <corpus-file-or-directory> [file-or-directory ...]");
             stdout.WriteLine("  [--embedding-dim <n>] [--layers <n>] [--heads <n>] [--context-length <n>]");
             stdout.WriteLine("  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>]");
-            stdout.WriteLine("  [--scratch-dir <dir>] [--optimised | --gpu [--gpu-allow-cpu-fallback]]");
+            stdout.WriteLine("  [--scratch-dir <dir>] [--optimised | --gpu [--gpu-allow-cpu-fallback] [--gpu-resident-weights]]");
             stdout.WriteLine();
             stdout.WriteLine("Trains a fresh GptModel from scratch on the given corpus, using a tokeniser");
             stdout.WriteLine("vocabulary already trained via the Tokeniser CLI, and saves the result as a");
@@ -41,6 +41,13 @@ public static class PretrainCli
             stdout.WriteLine("accept that CPU accelerator anyway (useful for exercising the mechanism on a");
             stdout.WriteLine("machine without a working GPU driver). --gpu and --optimised select different");
             stdout.WriteLine("backends and cannot be combined.");
+            stdout.WriteLine();
+            stdout.WriteLine("--gpu-resident-weights (TASK-036, requires --gpu) keeps every model parameter");
+            stdout.WriteLine("device-resident for the whole run, so a forward pass's matmuls stop re-uploading");
+            stdout.WriteLine("them every step - backward and the optimizer's update still run host-side as");
+            stdout.WriteLine("before. Off by default: whether this is actually faster depends on how often a");
+            stdout.WriteLine("step's other (non-matmul) tensor ops touch a resident parameter, which this");
+            stdout.WriteLine("project's own measurements found is not a given - see README.md stage 11.");
             return 1;
         }
 
@@ -53,6 +60,7 @@ public static class PretrainCli
         bool optimised = false;
         bool gpu = false;
         bool gpuAllowCpuFallback = false;
+        bool gpuResidentWeights = false;
 
         var positionalArgs = new List<string>();
         for (int i = 2; i < args.Length; i++)
@@ -104,6 +112,9 @@ public static class PretrainCli
                 case "--gpu-allow-cpu-fallback":
                     gpuAllowCpuFallback = true;
                     break;
+                case "--gpu-resident-weights":
+                    gpuResidentWeights = true;
+                    break;
                 default:
                     if (args[i].StartsWith("--", StringComparison.Ordinal))
                     {
@@ -124,6 +135,12 @@ public static class PretrainCli
         if (gpuAllowCpuFallback && !gpu)
         {
             stderr.WriteLine("--gpu-allow-cpu-fallback only makes sense together with --gpu.");
+            return 1;
+        }
+
+        if (gpuResidentWeights && !gpu)
+        {
+            stderr.WriteLine("--gpu-resident-weights only makes sense together with --gpu.");
             return 1;
         }
 
@@ -206,6 +223,21 @@ public static class PretrainCli
             numLayers: layers,
             numHeads: heads,
             maxSequenceLength: contextLength);
+
+        if (gpuResidentWeights)
+        {
+            // TASK-036: move every parameter's storage onto the GPU once,
+            // in place (Tensor.MoveToGpuInPlace) - a forward pass's matmuls
+            // then use each weight's existing device view directly
+            // (TASK-035) instead of re-uploading it every step. Backward
+            // and the optimizer's update below still run host-side
+            // unchanged; see this flag's own --help text for why that's a
+            // deliberate scope choice, not an oversight.
+            foreach (var parameter in model.Parameters())
+            {
+                parameter.Value.MoveToGpuInPlace();
+            }
+        }
 
         var optimizer = new AdamWOptimizer(model.Parameters(), learningRate: learningRate, weightDecay: weightDecay);
         var trainer = new Trainer(model, sampler, optimizer);

@@ -1116,6 +1116,89 @@ public class TensorTests
         Assert.Throws<InvalidOperationException>(() => t.LoadInPlace([1, 2]));
     }
 
+    // TASK-036: in-place GPU residency moves - mutate storage without
+    // replacing the Tensor object, the same reason SubtractInPlace/
+    // LoadInPlace exist (a Variable's Value/AdamWOptimizer's moment
+    // dictionaries hold this exact object by reference).
+
+    [Fact]
+    public void MoveToGpuInPlace_PreservesValuesAndMarksResident()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        t.MoveToGpuInPlace();
+
+        Assert.True(t.IsGpuResident);
+        Assert.Equal(new float[] { 1, 2, 3, 4 }, t.ToArray());
+    }
+
+    [Fact]
+    public void MoveToGpuInPlace_IsANoOpWhenAlreadyGpuResident()
+    {
+        using var t = Tensor.ZerosOnGpu([2, 2]);
+        t.LoadInPlace([1, 2, 3, 4]);
+
+        t.MoveToGpuInPlace();
+
+        Assert.True(t.IsGpuResident);
+        Assert.Equal(new float[] { 1, 2, 3, 4 }, t.ToArray());
+    }
+
+    [Fact]
+    public void MoveToHostInPlace_PreservesValuesAndClearsResidentFlag()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+        t.MoveToGpuInPlace();
+
+        t.MoveToHostInPlace();
+
+        Assert.False(t.IsGpuResident);
+        Assert.Equal(new float[] { 1, 2, 3, 4 }, t.ToArray());
+    }
+
+    [Fact]
+    public void MoveToHostInPlace_IsANoOpWhenNotGpuResident()
+    {
+        using var t = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+
+        t.MoveToHostInPlace();
+
+        Assert.False(t.IsGpuResident);
+        Assert.Equal(new float[] { 1, 2, 3, 4 }, t.ToArray());
+    }
+
+    [Fact]
+    public void MoveToGpuInPlace_SameObjectIdentity_SoAVariableOrOptimizerHoldingItSeesTheChange()
+    {
+        // The whole reason this is an in-place mutation rather than a
+        // ToGpu()-style "returns a new Tensor": a caller (e.g. a
+        // Variable's Value, or AdamWOptimizer's per-parameter moment
+        // dictionaries) holding this exact object by reference must see
+        // its residency change without needing to be told about a new one.
+        var t = Tensor.FromValues([1, 2], [2]);
+        var reference = t;
+
+        t.MoveToGpuInPlace();
+
+        Assert.Same(t, reference);
+        Assert.True(reference.IsGpuResident);
+        t.Dispose();
+    }
+
+    [Fact]
+    public void MoveToGpuInPlace_ThenMatMul_ProducesTheSameResultAsBeforeMoving()
+    {
+        using var a = Tensor.FromValues([1, 2, 3, 4], [2, 2]);
+        using var bBeforeMove = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+        using var expected = a.MatMul(bBeforeMove);
+
+        using var b = Tensor.FromValues([5, 6, 7, 8], [2, 2]);
+        b.MoveToGpuInPlace();
+        using var result = a.MatMul(b);
+
+        Assert.Equal(expected.ToArray(), result.ToArray());
+    }
+
     private static IEqualityComparer<float> EqualityComparer() => new ApproximateFloatComparer(1e-5f);
 
     private sealed class ApproximateFloatComparer(float tolerance) : IEqualityComparer<float>

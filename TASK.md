@@ -1412,7 +1412,7 @@ that through an actual training run.
   already documented in TASK-032; not chased further given `Tensor` overall
   sits at 98.3%, well above the 90% bar).
 
-- [ ] TASK-036: Wire a real device-resident training run end to end and
+- [x] TASK-036: Wire a real device-resident training run end to end and
   re-measure the stage 11 wall-clock comparison. Threads TASK-035's
   on-device op chaining through an actual forward → loss → backward →
   optimizer step, keeping parameters, activations, and gradients resident
@@ -1434,6 +1434,48 @@ that through an actual training run.
   chaining still doesn't beat the CPU paths at this project's toy scale,
   that's as reportable a finding as a genuine speedup would be.
   Depends on: TASK-035, TASK-033
+
+  **Done - resolved the open design question toward the smaller option,
+  and the measured result is exactly the kind of finding this task
+  explicitly anticipated:** chose "backward stays host-side, only the
+  forward pass's matmuls use resident weights" over making the whole
+  autodiff graph device-aware - the latter would require giving
+  `Transpose`, every elementwise op, and `AdamWOptimizer`'s update their
+  own device-resident code paths, real substantial work beyond this
+  task's scope. New `Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` (mutate
+  storage without replacing the object - the same reason
+  `SubtractInPlace`/`LoadInPlace` exist: a `Variable`'s `Value` can't be
+  reassigned once an optimizer holds that exact object by reference).
+  `PretrainCli` gained `--gpu-resident-weights` (requires `--gpu`, off by
+  default): moves every `model.Parameters()` entry's `Value` onto the GPU
+  once, right after construction, before the optimizer/training loop
+  start.
+
+  **Measured the actual consequence rather than assuming it would help:**
+  same tiny model (2-layer, 32-dim, 5 steps, batch size 2, context
+  length 32) throughout - scalar 3.5s, optimised 3.8s, plain `--gpu` 4.1s,
+  `--gpu --gpu-resident-weights` **153.7s (≈37× slower)**. Root cause,
+  exactly as TASK-035's own scope note anticipated: keeping weights
+  resident means every backward pass's `Transpose` and every optimizer
+  step's `SubtractInPlace` now touch a `GpuFloatBuffer` operand through
+  its correct-but-slow per-element indexer (a real host↔device round trip
+  *per element*, not a bulk transfer) instead of a plain heap array -
+  paying that cost on every resident parameter, every single step. This
+  is reported as a real, complete, honest finding - README.md's stage 11
+  and Project status sections, and PLAN.md's stage 11 follow-up note, all
+  say plainly that this specific optimization makes things dramatically
+  worse with today's implementation, not that it's an unfinished win.
+
+  Tests: `TensorTests` covers `MoveToGpuInPlace`/`MoveToHostInPlace`
+  directly (value round-tripping both ways, no-op cases, same-object
+  identity so a caller holding the reference sees the change, and a
+  `MatMul` producing the same result whichever operand was moved);
+  `PretrainCliTests` proves `--gpu-resident-weights` requires `--gpu` and
+  trains correctly (finite loss values, a valid checkpoint) at a
+  deliberately tiny fixture size, chosen specifically because of how slow
+  this path is - correctness only, not a speed claim. Solution-wide: 458
+  tests passing; `Pretrain.PretrainCli` at 97.7%, `Tensor.Tensor` at 97.9%
+  branch coverage.
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

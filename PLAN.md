@@ -319,6 +319,27 @@ rather than assuming it fits in RAM:
     variant or only the hot-path ones) are deliberately left to those
     tasks, not pre-decided here.
 
+    **Resolved by TASK-034/035/036, and the answer is an honest
+    "it doesn't help, here's precisely why":** TASK-034 added
+    device-resident tensor storage (`GpuFloatBuffer`); TASK-035 taught
+    `MatMulGpu` to reuse an already-resident operand instead of
+    re-uploading it, deliberately *not* making its output resident too -
+    doing so would silently degrade every other, not-yet-GPU-aware op
+    (backward's `Transpose`, elementwise ops, the optimizer's update) to a
+    per-element device round trip the moment it touched that result, a
+    real performance cliff this project chose not to introduce without
+    also fixing it everywhere, which is genuine further work. TASK-036
+    wired an opt-in `--gpu-resident-weights` flag and measured the actual
+    consequence of keeping weights resident through a whole training step
+    with today's implementation: **≈37× slower**, not faster, because
+    exactly the ops TASK-035 left alone (backward's `Transpose`, AdamW's
+    per-parameter update) now pay that per-element cost on every resident
+    parameter, every step. This is a real, complete, honestly-reported
+    finding, not an unsolved problem - closing it for real would mean
+    giving those specific ops their own device-resident code paths too,
+    which remains open future work if ever revisited, not currently
+    planned.
+
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage
 (mirroring the numbered list above), each covering what problem that stage

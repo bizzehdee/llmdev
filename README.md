@@ -783,6 +783,54 @@ verified - see the `[Theory]`-parametrised tests in `TensorTests.cs`/
 OpenCL on this machine, not ILGPU's CPU accelerator - both prove the
 kernel's math is correct; only which hardware executed it changed.
 
+**Follow-up: does keeping model weights resident on the GPU help?**
+(TASK-034/035/036) Once every matmul call stopped re-uploading an
+already-device-resident operand (TASK-035), the natural next question was
+whether keeping a model's *weights* GPU-resident for a whole training run
+- via new `Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` (TASK-034) and a
+new `--gpu-resident-weights` flag (requires `--gpu`) - actually helps.
+**Measured, not assumed: it's dramatically worse, not better.** Same tiny
+model (2-layer, 32-dim, 5 steps, batch size 2, context length 32) throughout:
+
+| Backend | Wall-clock (`real`, `time`) |
+|---|---|
+| Scalar (default) | 3.5s |
+| Optimised (stage 8) | 3.8s |
+| GPU (`--gpu`) | 4.1s |
+| GPU + resident weights (`--gpu --gpu-resident-weights`) | 153.7s (≈ 37× slower) |
+
+**Why:** TASK-035 deliberately only taught `Tensor.MatMulGpu` to use an
+already-resident operand directly - it left every *other* op (backward's
+`Transpose`, the elementwise ops behind it, `AdamWOptimizer`'s
+`SubtractInPlace` weight update) untouched, and none of them have a
+device-resident code path. `GpuFloatBuffer`'s indexer is correct against
+any of them, but it's a genuine host↔device round trip *per element*, not
+a bulk transfer - so once weights stay resident, every backward pass and
+every optimizer step touches every parameter element-by-element instead of
+in one batch. `--gpu-resident-weights` is opt-in and off by default
+specifically because of this - it exists to make the mechanism (and this
+exact finding) demonstrable, not because it's recommended. Closing this
+gap for real would mean giving `Transpose`, the elementwise ops, and the
+optimizer's update their own device-resident code paths too (real,
+substantial further work, not attempted here) - reporting "this made
+things much worse, and here's precisely why" is exactly the kind of
+finding this README's honesty commitment exists for, the same as the
+memory/disk footprint section's own surprise.
+
+```bash
+cd tests/Tensor.Tests && dotnet test
+cd tests/Pretrain.Tests && dotnet test
+```
+
+`TensorTests` covers `MoveToGpuInPlace`/`MoveToHostInPlace` directly
+(value round-tripping, no-op cases, same-object identity, and a `MatMul`
+producing the same result whichever operand was moved) and
+`MatMul`-with-a-resident-operand correctness (either operand, both, and
+the same resident operand reused correctly across several calls);
+`PretrainCliTests` proves `--gpu-resident-weights` requires `--gpu` and
+trains correctly (loss values are finite, a checkpoint is produced) at a
+deliberately tiny fixture size, given how slow this path is.
+
 ## Putting it together: training and generating from code
 
 Every stage that touches a model artifact now has a CLI (tokeniser -
@@ -1021,6 +1069,23 @@ with both CPU paths (see stage 11's table) - not a dramatic win, since
 kernel-launch/transfer overhead still dominates actual compute at this
 size, but a genuinely different and more complete finding than "GPU was
 slower," which no longer holds now that a real GPU is reachable.
+
+TASK-034/035/036 followed up on stage 11 once the real-hardware numbers
+above landed roughly even instead of a clear GPU win: root-caused (not
+disk storage - already excluded) to `MatMulGpu` allocating, transferring,
+and freeing device buffers on every single matmul call. TASK-034 added
+device-resident tensor storage; TASK-035 taught matmul to reuse an
+already-resident operand instead of re-uploading it, explicitly *not*
+making its output resident too (stated as a deliberate scope choice, not
+a discovered gap - doing so would silently make every other op fall back
+to a slow per-element device round trip); TASK-036 wired that mechanism
+into an actual `--gpu-resident-weights` flag and measured the result
+honestly: **dramatically slower (≈37×), not faster**, because backward's
+`Transpose` and the optimizer's weight update aren't device-resident-aware
+and pay that same per-element cost on every resident parameter, every
+step. See stage 11 for the numbers and the full explanation - a real,
+reportable finding about exactly where this optimization's limits are,
+not a success story with the failure mode omitted.
 
 No open gaps remain from this line of follow-up work - see TASK.md for the
 full task-by-task history if scaling to a genuinely large corpus/dataset
