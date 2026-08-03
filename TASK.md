@@ -223,7 +223,7 @@ Required by: TASK-008
 Added after the original 7-stage plan, at the user's request (not part of
 TASK-001..013's original scope).
 
-- [ ] TASK-014: Interactive chat CLI — a console app that loads a saved
+- [x] TASK-014: Interactive chat CLI — a console app that loads a saved
   `ModelCheckpoint` and tokeniser vocab (`BpeTokeniser.Load`), then loops:
   read a line of user input, generate a continuation via
   `Generation.TextGenerator`, print it, repeat. Maintains conversation
@@ -241,6 +241,18 @@ TASK-001..013's original scope).
   necessarily answer questions or follow instructions, unless the training
   corpus was itself chat-shaped. Don't oversell "chatbot" in the CLI's own
   banner/help text.
+
+  Done: new `src/Chat/` project. Followed the same testable-CLI pattern
+  established for TASK-024 from the start (`ChatCli.Run(args, stdin,
+  stdout, stderr)`, `Program.cs` a one-line call) rather than writing it
+  as untestable top-level statements and retrofitting later - `Chat.ChatCli`
+  is at 100% branch coverage. The honest disclaimer appears in both the
+  no-args usage text and the post-load banner, not just one or the other.
+  Verified with a real (if tiny and untrained) checkpoint + vocab fixture,
+  not just mocked: multi-turn conversations, all four sampling flags
+  together, a corrupted-checkpoint error path (reusing the byte-corruption
+  technique from `ModelCheckpointTests`), and deterministic output at
+  temperature 0 across repeated runs.
   Depends on: TASK-012, TASK-013
 
 ## Optional optimised math backend

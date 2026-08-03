@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Chat/Chat.csproj" />
     <Project Path="src/Common/Common.csproj" />
     <Project Path="src/Generation/Generation.csproj" />
     <Project Path="src/Model/Model.csproj" />
@@ -8,6 +9,7 @@
     <Project Path="src/Training/Training.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Chat.Tests/Chat.Tests.csproj" />
     <Project Path="tests/Common.Tests/Common.Tests.csproj" />
     <Project Path="tests/Generation.Tests/Generation.Tests.csproj" />
     <Project Path="tests/Model.Tests/Model.Tests.csproj" />
