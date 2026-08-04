@@ -1,29 +1,23 @@
 # llmdev
 
-A personal project to learn how LLMs work by building one from first
-principles in C#/.NET — no ML, tokenisation, or tensor/autodiff libraries
-(two narrow, explicitly-scoped exceptions, both opt-in and off by default,
-neither a replacement for the hand-written implementation it speeds up: a
-`--optimised` fast path for tensor math, stage 8 below; and a `--gpu` path
-via ILGPU, stage 11 below, added specifically to demonstrate GPU-based
-training). Every mechanism (tokeniser, tensor math, autodiff, attention,
-training loop, generation, instruction tuning) is written by hand so it's
-understood, not a black box behind a library call.
+A large language model built from first principles in C#/.NET — no ML,
+tokenisation, or tensor/autodiff libraries (two narrow, explicitly-scoped
+exceptions, both opt-in and off by default, neither a replacement for the
+hand-written implementation it speeds up: a `--optimised` fast path for
+tensor math, stage 8 below; and a `--gpu` path via ILGPU, stage 11 below).
+Every mechanism — tokeniser, tensor math, autodiff, attention, training
+loop, generation, instruction tuning — is written by hand, so each piece
+is a working, readable example of how the mechanism actually functions,
+not a black box behind a library call.
 
 This README is a lesson plan: one section per stage, each covering what
 problem the stage solves, what's actually happening conceptually, which
-source files to go read, and what to run to see it working. Every stage
-below is built and runnable today — see [Project status](#project-status)
-for what to expect from it as a chatbot.
+source files to go read, and what to run to see it working.
 
-Stages are numbered in the order it makes sense to *approach* them, not the
-order they were originally built in — see [PLAN.md](PLAN.md) if you want the
-build history instead (its own stage numbers differ slightly, since
-instruction tuning and the chat CLI were added after the original plan and
-this README now presents them in a more sensible reading order: fine-tune
-*before* you sit down to chat, since the chat CLI barely resembles a useful
-assistant without it). [TASK.md](TASK.md) has the task-by-task history of
-how everything below got built.
+Stages are numbered in the order that makes sense to *learn* them, which
+is not always the order the source directories appear in - fine-tuning
+(stage 9) comes before the chat CLI (stage 10), for instance, since a
+chat session is much more interesting once the model has been fine-tuned.
 
 Two different kinds of section follow, and it matters which is which:
 
@@ -80,7 +74,7 @@ dotnet run -- <vocab-size> <file-or-directory> [file-or-directory ...] [--scratc
 Example, training a tiny 400-token vocabulary on a small repeated corpus
 (the corpus used throughout this README's examples touches the same topics
 as [`examples/sft-example.jsonl`](examples/sft-example.jsonl) below, so the
-pipeline stays coherent end to end; real command, real output):
+pipeline stays coherent end to end):
 
 ```text
 $ dotnet run -- 400 big_corpus.txt --scratch-dir /mnt/data/scratch
@@ -285,9 +279,9 @@ dotnet run -- <vocab-path> <output-checkpoint-path> <corpus-file-or-directory> [
 ```
 
 Example, training a tiny model on the same corpus stage 1 tokenised, using
-the `vocab.bpe` that stage produced (real command, real output — a toy-sized
-model trained for only 300 steps, so the loss reaching ~0.01 reflects
-memorising a small repetitive corpus, not general fluency):
+the `vocab.bpe` that stage produced (a toy-sized model trained for only
+300 steps, so the loss reaching ~0.01 reflects memorising a small
+repetitive corpus, not general fluency):
 
 ```text
 $ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
@@ -457,7 +451,7 @@ dotnet run -- <base-checkpoint-path> <vocab-path> <dataset-path> <output-checkpo
   [--epochs <n> | --steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>] [--optimised]
 ```
 
-**`--epochs`** (default 3, TASK-030) is the primary way to size a training
+**`--epochs`** (default 3) is the primary way to size a training
 run: each epoch is one full, freshly-shuffled pass over the dataset
 (`ceil(datasetSize / batchSize)` steps), so the total amount of training
 scales with dataset size automatically instead of you having to
@@ -465,18 +459,13 @@ hand-compute a step count against a dataset you may not have measured yet.
 `--steps` still exists as a lower-level escape hatch - a fixed step count,
 sequential (unshuffled) example order, no notion of an epoch - but the two
 are mutually exclusive; specifying both is an error. `--batch-size`
-defaults to 8, a fixed number independent of dataset size (unlike the
-demo below, which used to need `--batch-size` hand-set to match its
-6-example dataset exactly).
+defaults to 8, a fixed number independent of dataset size.
 
 Example, fine-tuning the checkpoint stage 6 produced above on
-[`examples/sft-example.jsonl`](examples/sft-example.jsonl) (real command,
-real output). The 6-example demo dataset is far smaller than
-`--batch-size`'s default of 8, so every epoch here is one full-batch step
-over all 6 examples - `--epochs 300` reproduces the same "every example,
-every step" convergence the demo used to get by manually setting
-`--batch-size` to the dataset size, without the CLI needing to know the
-dataset size at all:
+[`examples/sft-example.jsonl`](examples/sft-example.jsonl). The 6-example
+demo dataset is far smaller than `--batch-size`'s default of 8, so every
+epoch here is one full-batch step over all 6 examples - `--epochs 300`
+trains on every example, every step, for 300 steps total:
 
 ```text
 $ dotnet run -- model.checkpoint vocab.bpe examples/sft-example.jsonl model-sft.checkpoint \
@@ -517,7 +506,7 @@ then loops: read a line of input, generate a continuation, print it,
 repeat. Conversation state is a single growing token-id sequence (not
 re-encoded text each turn), so multi-turn context accumulates correctly.
 
-**Honest expectation-setting, not a bug:** a model that only went through
+**What to expect:** a model that only went through
 stage 6 (pretraining) is a *raw next-token-prediction model*, not an
 instruction-tuned assistant - it will continue text in the style of
 whatever it was trained on, not necessarily answer questions or follow
@@ -540,10 +529,10 @@ dotnet run -- <checkpoint-path> <vocab-path> [--temperature <f>] [--top-k <n>] [
 
 **Default mode** - reproduces the `"### Instruction:\n{instruction}\n\n### Response:\n"`
 shape the model was actually fine-tuned on. Example, chatting with the
-stage-9 fine-tuned checkpoint from above (real command, real output -
-greedy sampling, and a *tiny*, undertrained toy model by design, so don't
-expect fluent prose; this is here to show the mechanism working end to
-end, not to demonstrate quality). Typing a bare one-line question doesn't
+stage-9 fine-tuned checkpoint from above (greedy sampling, and a *tiny*,
+undertrained toy model by design, so don't expect fluent prose; this is
+here to show the mechanism working end to end, not to demonstrate
+quality). Typing a bare one-line question doesn't
 reproduce the template shape the model was fine-tuned on, so instead of
 answering it continues into whatever text its training distribution makes
 most likely next:
@@ -562,7 +551,7 @@ s freat tocabu     av
 Goodbye.
 ```
 
-**`--instruction-tuned`** (TASK-027) - opt-in, off by default so a purely
+**`--instruction-tuned`** - opt-in, off by default so a purely
 pretrained checkpoint's existing raw-continuation behaviour isn't
 disturbed. Each turn's input is wrapped via `SftDataset.FormatPrompt`
 before encoding (the exact same template `SftDataset.Tokenize` uses, not a
@@ -580,7 +569,7 @@ template automatically, without a separate history-reformatting step:
 $ dotnet run -- model-sft.checkpoint vocab.bpe --instruction-tuned --temperature 0 --max-new-tokens 30
 
 Loaded model and vocabulary. Instruction-tuned mode: each turn is wrapped in the same
-prompt template the model was fine-tuned on (TASK-016), and generation stops at the next
+prompt template the model was fine-tuned on, and generation stops at the next
 turn boundary instead of running on.
 Type /exit (or send EOF, e.g. Ctrl+D) to leave.
 
@@ -591,20 +580,20 @@ Red, blue, and yellow are the thre
 Goodbye.
 ```
 
-Honest note on that transcript: this particular tiny, greedy, undertrained
-demo model answers the question correctly, then keeps going instead of
-actually halting at a `### Instruction:` boundary within 30 tokens - it
-never learned a strong enough tendency to reproduce that exact marker at
-this toy scale (pushed further, greedy decoding on a model this small and
-this overfit tends to degenerate into repetition loops rather than
-reproduce it either). The halting mechanism itself is proven correct by
+Note on that transcript: this particular tiny, greedy, undertrained demo
+model answers the question correctly, then keeps going instead of halting
+at a `### Instruction:` boundary within 30 tokens - it never learned a
+strong enough tendency to reproduce that exact marker at this toy scale
+(pushed further, greedy decoding on a model this small and this overfit
+tends to degenerate into repetition loops rather than reproduce it
+either). The halting mechanism itself is proven correct by
 `Generation.Tests`' dedicated stop-sequence tests (a case engineered so
-the marker genuinely appears in generated text, confirming generation
-halts and trims at exactly that point) - this demo shows the *template
-application* working correctly, not a guarantee that any given toy model
-will spontaneously hit the boundary in any given number of tokens.
+the marker does appear in generated text, confirming generation halts and
+trims at exactly that point) - this demo shows the *template application*
+working correctly, not a guarantee that any given toy model will
+spontaneously hit the boundary within any given number of tokens.
 
-**`--context-length <n>`** (TASK-028) - caps how many of the most recent
+**`--context-length <n>`** - caps how many of the most recent
 tokens a conversation keeps before `TextGenerator`'s own sliding window
 (governed by the model's `MaxSequenceLength`) would otherwise kick in.
 Validated against the loaded model's `MaxSequenceLength` - a value that's
@@ -618,8 +607,8 @@ $ dotnet run -- model-sft.checkpoint vocab.bpe --context-length 9999
 
 A small value truncates conversation history far sooner than the model's
 own 128-token limit would, which shows up as visibly degraded output once
-too little context remains (real command, real output, three turns in a
-row with `--context-length 16`):
+too little context remains (three turns in a row with
+`--context-length 16`):
 
 ```text
 $ dotnet run -- model-sft.checkpoint vocab.bpe --context-length 16 --temperature 0 --max-new-tokens 10
@@ -646,9 +635,7 @@ cd tests/Generation.Tests && dotnet test
 
 *(No CLI of its own — a flag (`--gpu`) accepted by the stage 6 CLI, the
 same way stage 8's `--optimised` is, not a pipeline stage you run on its
-own. Added after the original plan, at the user's explicit request
-specifically to demonstrate GPU-based training as part of this lesson
-plan.)*
+own.)*
 
 **Problem it solves:** stages 2 and 8 only ever run on the CPU - the
 hand-written scalar path, or stage 8's SIMD-accelerated one. Neither can
@@ -691,10 +678,8 @@ real GPU, after this fix.
 **Run it:** no CLI of its own - pass `--gpu` to the
 [pretraining CLI](#stage-6--training-loop) (`--gpu-allow-cpu-fallback` also
 exists, for a machine without a working GPU driver - see the note above).
-Real command, real output, running on a GPU via OpenCL
-(`GpuContext`'s own accelerator-selection logic, unchanged since
-TASK-031, already preferred a real GPU whenever `Context.Devices` reported
-one - it just had nothing to prefer until the driver was fixed):
+Running on a GPU via OpenCL (`GpuContext`'s accelerator-selection logic
+prefers a real GPU whenever `Context.Devices` reports one):
 
 ```text
 $ dotnet run -- vocab.bpe model.checkpoint big_corpus.txt \
@@ -767,15 +752,19 @@ verified - see the `[Theory]`-parametrised tests in `TensorTests.cs`/
 is available, and against ILGPU's own CPU accelerator otherwise - either
 way, they prove the kernel's math is correct.
 
-**Follow-up: does keeping model weights resident on the GPU help?**
-(TASK-034/035/036/037/038/039) After matmul stopped re-uploading an
-operand already resident on the device (TASK-035), the next question was
-whether keeping a model's *weights* resident on the GPU for a whole
-training run actually helps. This uses new
-`Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` methods (TASK-034) and a new
-`--gpu-resident-weights` flag (requires `--gpu`). **Result: it makes
-training much slower, not faster - and stayed that way even after every
-other op on this path was also given a device-resident kernel.** Same
+**Keeping model weights resident on the GPU:** every GPU op above uploads
+its operands, runs the kernel, and downloads the result - for a whole
+training run, that means re-uploading the same weight matrix on every
+single step. `Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` and the
+`--gpu-resident-weights` flag (requires `--gpu`) instead move a model's
+parameters onto the GPU once and leave them there, so a forward pass's
+matmuls read a weight that's already on the device. Backward's `Transpose`,
+the elementwise ops (`Add`/`Subtract`/`Multiply`/`Divide`/`Scale`/`Sqrt`),
+and the optimizer's in-place weight update each have their own
+device-resident kernel too, so nothing on this path silently falls back to
+a slow, per-element transfer.
+
+**Measured result: this makes training much slower, not faster.** Same
 tiny model (2-layer, 32-dim, 5 steps, batch size 2, context length 32)
 throughout:
 
@@ -784,42 +773,24 @@ throughout:
 | Scalar (default) | 3.5s |
 | Optimised (stage 8) | 3.8s |
 | GPU (`--gpu`) | 3.9s |
-| GPU + resident weights (`--gpu --gpu-resident-weights`), before TASK-037/038/039 | 153.7s (≈ 37× slower than `--gpu`) |
-| GPU + resident weights (`--gpu --gpu-resident-weights`), after TASK-037/038/039 | 355.3s (≈ 91× slower than `--gpu`) |
+| GPU + resident weights (`--gpu --gpu-resident-weights`) | 355.3s (≈ 91× slower than `--gpu`) |
 
-**Why it was slow at first:** TASK-035 only taught `Tensor.MatMulGpu` to
-use an operand already resident on the device directly. Every *other* op
-- backward's `Transpose`, the elementwise ops behind it,
-`AdamWOptimizer`'s `SubtractInPlace` weight update - was left without a
-device-resident code path at that point, so each one fell back to
-`GpuFloatBuffer`'s indexer: correct, but a separate host-to-device round
-trip *per element*, not a bulk transfer. TASK-037 gave `Transpose` a
-device-resident kernel, TASK-038 gave the elementwise ops one, and
-TASK-039 gave the optimizer's weight update one - closing every gap
-TASK-036 identified.
-
-**Why it got slower still, once those gaps were closed:** this is a real,
-measured result, not a mistake left uncorrected. `AdamWOptimizer`'s weight
-update calls `SubtractInPlace(delta)` on the resident parameter, but
-`delta` itself is never resident - it comes from moment-estimate
-arithmetic that stays on the heap. So every call to the new
-device-resident `SubtractInPlaceGpu` still allocates a fresh device
-buffer, uploads `delta` into it, runs the kernel, and frees the buffer.
-On this project's GPU and driver, that allocate-and-free pair costs more
-per call than the per-element fallback it replaced. Kernelising an op only
-pays off when its fixed per-launch, per-allocation cost is small next to
-what it saves - at this project's toy model sizes, it is not. Because of
-this, `AdamWOptimizer`'s moment estimates were deliberately **not** moved
-to GPU residency: doing so would only create more of the same pattern
-(more resident operands, more kernel launches, more transient allocations
-for whichever operand still isn't resident), and the measurement above
-already shows that pattern costs more than it saves here.
-`--gpu-resident-weights` stays opt-in and off by default - not because
-the mechanism is broken, but because, measured honestly, it is not a win
-at this scale. A model wide enough that each kernel's own compute
-dominates its launch/allocation overhead might tell a different story, the
-same reasoning as stage 11's main GPU-vs-CPU table above; confirming that
-is out of scope for this README's toy-sized demos.
+**Why:** the optimizer's weight update calls `SubtractInPlace(delta)` on
+the resident parameter, but `delta` itself is never resident - it comes
+from moment-estimate arithmetic that stays on the heap. So every call to
+the device-resident `SubtractInPlaceGpu` kernel still allocates a fresh
+device buffer, uploads `delta` into it, runs the kernel, and frees the
+buffer. On this project's GPU and driver, that allocate-and-free pair
+costs more per call than a plain host-to-device transfer would. Kernel
+launches and device allocations both have a fixed per-call cost - a
+kernel only pays off when that fixed cost is small next to the compute it
+saves, and at this project's toy model sizes, it is not. `--gpu-resident-
+weights` stays opt-in and off by default because of this - not because
+the mechanism is broken, but because it is not a win at this scale. A
+model wide enough that each kernel's own compute dominates its
+launch/allocation overhead would likely tell a different story, the same
+reasoning as the GPU-vs-CPU table above; this README's toy-sized demos
+don't reach that scale.
 
 ```bash
 cd tests/Tensor.Tests && dotnet test
@@ -839,24 +810,21 @@ slow this path is.
 
 ## Stage 12 — Incremental training within a fixed RAM budget
 
-*(No CLI of its own yet - a new flag, `--resume-from-checkpoint`, on the
-stage 6 pretraining CLI. Added at the user's explicit request, as an
-alternative to needing many machines with large RAM each for one big
-training run.)*
+*(No CLI of its own - a flag, `--resume-from-checkpoint`, on the stage 6
+pretraining CLI.)*
 
 **Problem it solves:** training on a corpus larger than fits in RAM at
 once usually means either more RAM or more machines. This project's
 tokeniser already avoids that for training a vocabulary (see the memory/
-disk footprint section above), but training a *model* on a corpus in
-chunks - continuing the same model checkpoint from one chunk to the next
-- was not possible until now: the pretraining CLI always built a fresh
-model and trained it from scratch.
+disk footprint section below), and the same idea extends to training a
+*model*: split a large corpus into chunks, and train on one chunk at a
+time, continuing the same model checkpoint from one chunk to the next.
 
-**What's happening:** `--resume-from-checkpoint <path>` (TASK-040) loads
-an existing checkpoint via `ModelCheckpoint.Load` and continues training
-it on the corpus given in the same command, instead of building a new
-model. The model's architecture (embedding dimension, layer count, head
-count, context length) comes entirely from the checkpoint and cannot be
+**What's happening:** `--resume-from-checkpoint <path>` loads an existing
+checkpoint via `ModelCheckpoint.Load` and continues training it on the
+corpus given in the same command, instead of building a new model. The
+model's architecture (embedding dimension, layer count, head count,
+context length) comes entirely from the checkpoint and cannot be
 overridden - passing `--embedding-dim` or similar alongside
 `--resume-from-checkpoint` is an error. Run it in a loop, once per corpus
 chunk, each run resuming the previous run's output checkpoint, and the
@@ -864,17 +832,15 @@ model file compounds across the whole sequence without ever needing the
 full corpus - or the full training run - in memory at once.
 
 **What this trades away:** total training time for RAM. Training a large
-corpus in sequential 8 GB-sized chunks on one machine takes as long as
+corpus in sequential, RAM-sized chunks on one machine takes as long as
 training it all at once would, just spread across more, smaller runs -
 it does not speed anything up, and is not a substitute for genuinely
 parallel, multi-machine training.
 
-**A known limitation, stated plainly, not hidden:** `AdamWOptimizer`'s
-per-parameter moment estimates are not part of the checkpoint file, so
-every `--resume-from-checkpoint` run restarts them from zero. The model's
-learned weights carry over correctly; the optimizer's own sense of recent
-gradient history does not. This is a deliberate scope choice for now, not
-an oversight - see TASK-040 in TASK.md.
+**A known limitation:** `AdamWOptimizer`'s per-parameter moment estimates
+are not part of the checkpoint file, so every `--resume-from-checkpoint`
+run restarts them from zero. The model's learned weights carry over
+correctly; the optimizer's own sense of recent gradient history does not.
 
 **Source files:** `src/Pretrain/PretrainCli.cs`, `src/Training/ModelCheckpoint.cs`.
 
@@ -909,27 +875,18 @@ original architecture, rejects an architecture flag combined with
 checkpoint's, and reports a clear error for a checkpoint path that
 doesn't exist.
 
-**TASK-041 (done):** confirmed the tokeniser's own RAM bound holds at a
-realistic large-corpus scale (200 MB and 400 MB, not just the sizes
-already in the memory/disk footprint table below) - see that section for
-the numbers. Also confirmed that retraining or extending the vocabulary
-per chunk isn't needed at all: this project's tokeniser is byte-level BPE,
-so a vocabulary trained once, up front, on a representative sample already
-covers any later, unseen text via byte fallback.
+**Retraining the vocabulary per chunk isn't needed.** This project's
+tokeniser is byte-level BPE, so a vocabulary trained once, up front, on a
+representative sample already covers any later, unseen text via byte
+fallback - see the memory/disk footprint section below for what actually
+drives a chunk's peak RAM, and how to size one to a budget.
 
-**TASK-042 (done):** measured what actually drives one training chunk's
-peak RAM - corpus chunk size, by far, then context length; batch size and
-model width barely moved it at this project's toy scale. See the memory/
-disk footprint section below for the numbers and the practical guidance
-they give for sizing a chunk to a budget.
-
-**TASK-043 (done) - the full pipeline, chained end to end:** three real,
-distinct corpus chunks (~800 KB each, different repeated sentences so it's
-obvious each chunk's content is genuinely different, not the same text
-split arbitrarily), a vocabulary trained once on chunk 1 only (per
-TASK-041's finding, not retrained for chunks 2/3), and three separate
-`Pretrain` runs chained with `--resume-from-checkpoint`, each measured with
-`/usr/bin/time -v`:
+**A worked example, chained end to end:** three real, distinct corpus
+chunks (~800 KB each, different repeated sentences so it's obvious each
+chunk's content is genuinely different, not the same text split
+arbitrarily), a vocabulary trained once on chunk 1 only, and three
+separate `Pretrain` runs chained with `--resume-from-checkpoint`, each
+measured with `/usr/bin/time -v`:
 
 ```bash
 vocab=vocab.bpe; scratch=./scratch
@@ -951,10 +908,9 @@ for chunk in chunk2.txt chunk3.txt; do
 done
 ```
 
-A plain shell loop, not a dedicated orchestrating CLI - PLAN.md flagged
-this as an open question, resolved here: the actual gap was
+A plain shell loop, not a dedicated orchestrating CLI - the actual gap was
 `--resume-from-checkpoint` itself, not the looping around it, and nothing
-in this demo needed more than the shell already gives for free.
+in this demo needs more than the shell already gives for free.
 
 | Chunk | Resumed from | Peak RAM | Loss (first → last step) |
 |---|---|---|---|
@@ -962,38 +918,36 @@ in this demo needed more than the shell already gives for free.
 | 2 | chunk 1's checkpoint | ~218 MB | 10.89 → 2.50 |
 | 3 | chunk 2's checkpoint | ~217 MB | 6.78 → 3.20 |
 
-**Peak RAM stayed flat across all three runs, regardless of how many
+**Peak RAM stays flat across all three runs, regardless of how many
 chunks came before** - the whole point: each run is a separate process
 that only ever holds one chunk and the model in memory, never the full
 multi-chunk corpus or a multi-chunk training run's combined state. A
 tenth chunk would cost the same as the first. Chunk 2's *first-step* loss
-(10.89) is higher than chunk 1's own starting point would have been -
-expected, not a bug: 40 steps on chunk 1's highly repetitive text drove
-the loss very low against *that* text specifically, and chunk 2's
-different content initially looks unfamiliar to those same weights,
-before continued training brings the loss back down. Bulk-encoding chunks
-2 and 3 succeeded without errors even though the vocabulary was only ever
-trained on chunk 1 - direct, practical confirmation of TASK-041's byte
--fallback claim, not just a claim taken on faith. Generating from the
-final, three-chunk-compounded checkpoint works end to end (loads,
-produces output, doesn't crash) - the toy model size and step count used
-here mean the output itself is not fluent text, consistent with every
-other toy-scale demo in this README.
+(10.89) is higher than chunk 1's own final loss - expected, not a bug: 40
+steps on chunk 1's highly repetitive text drove the loss very low against
+*that* text specifically, and chunk 2's different content initially looks
+unfamiliar to those same weights, before continued training brings the
+loss back down. Bulk-encoding chunks 2 and 3 succeeds without errors even
+though the vocabulary was only ever trained on chunk 1 - a direct,
+practical demonstration of BPE's byte fallback covering unseen text.
+Generating from the final, three-chunk-compounded checkpoint works end to
+end (loads, produces output, doesn't crash) - the toy model size and step
+count used here mean the output itself is not fluent text, consistent
+with every other toy-scale demo in this README.
 
-**The trade-off this makes, stated as plainly as stage 11's own GPU
-findings:** wall-clock time for RAM, not a distributed/parallel
-alternative. Training N chunks sequentially on one machine takes as long
-as training all of them at once would (each chunk's own training time,
-summed) - it does not train faster, only within a smaller RAM footprint
-per step. Sizing a chunk in practice: see the memory/disk footprint
-section above for what actually drives peak RAM (corpus chunk size, by
-far) and pick a chunk size accordingly for a given budget.
+**The trade-off this makes:** wall-clock time for RAM, not a
+distributed/parallel alternative. Training N chunks sequentially on one
+machine takes as long as training all of them at once would (each
+chunk's own training time, summed) - it does not train faster, only
+within a smaller RAM footprint per step. Sizing a chunk in practice: see
+the memory/disk footprint section below for what actually drives peak RAM
+(corpus chunk size, by far) and pick a chunk size accordingly for a given
+budget.
 
 **Source files** (tests): `tests/Pretrain.Tests/PretrainCliTests.cs`
-(`--resume-from-checkpoint` itself, per TASK-040 above - this demo chains
-real CLI runs rather than adding new automated tests of its own, since
-what TASK-043 needed to prove was a real, measured wall-clock/RAM result,
-not new code).
+covers `--resume-from-checkpoint` itself; this worked example chains real
+CLI runs on top of that, rather than adding further automated tests of
+its own.
 
 ## Putting it together: training and generating from code
 
@@ -1112,10 +1066,9 @@ dotnet run
 
 ## Memory and disk footprint: a worked example
 
-PLAN.md's standing "memory constraint" rule - disk-backed scratch structures
-in place of large heap allocations, since an earlier version of this
-project was killed by an out-of-memory error - isn't just a design
-aspiration. Here's what it looks like in practice, measured with
+This project treats disk as scratch space rather than assuming a corpus
+fits in RAM - a standing design rule, not just an aspiration. Here's what
+it looks like in practice, measured with
 `/usr/bin/time -v` for peak RAM and real byte counts for disk, against
 real corpora from 2 MB up to 100 MB, so the *trend* as input size grows is
 visible, not just one data point:
@@ -1131,22 +1084,16 @@ visible, not just one data point:
 | 200.0 MB | ~3200 MB | ~3.7 GB | 4 KB |
 | 400.0 MB | ~6400 MB | ~7.8 GB | 4 KB |
 
-**TASK-041, extending this table into "hundreds of MB" corpora rather than
-assuming the trend holds:** the 200 MB and 400 MB rows above were measured
-the same way as every other row (`/usr/bin/time -v`, real files), and both
-land within a few percent of what `EstimateScratchBytes`'s 16-bytes-per-
-input-byte formula predicts from the smaller rows - the bound holds. Their
-input text is a repeated sentence rather than varied prose (large real
-text corpora at this size weren't readily available), which caused BPE's
-merges to plateau below the 1000 target (323 merges) - stated plainly
-because it means these two rows aren't directly comparable to the smaller
-rows' *merge* behaviour, only to their RAM/disk scaling, which depends on
-input byte count, not text content. 400 MB's ~7.8 GB peak RAM already
-sits close to an 8 GB budget (the size used as an example throughout stage
-12 above), so larger sizes weren't attempted on this development machine -
-not because the bound was expected to fail, but because pushing a shared
-machine's RAM usage right to its limit just to extend a table further
-isn't a reasonable trade for that portion of it.
+The 200 MB and 400 MB rows land within a few percent of what
+`EstimateScratchBytes`'s 16-bytes-per-input-byte formula predicts from the
+smaller rows, confirming the disk-backed design holds at this scale. Their
+input text is a repeated sentence rather than varied prose (used to reach
+this size quickly for measurement purposes), which caused BPE's merges to
+plateau below the 1000-token target (323 merges) - a property of that
+specific input, not of the RAM/disk figures, which depend on input byte
+count, not text content. 400 MB's ~7.8 GB peak RAM already sits close to
+an 8 GB budget, a useful reference point for sizing a corpus chunk against
+a RAM limit.
 
 **Stage 6 (pretraining)** - same small 4-layer, 128-dim model architecture
 each time, using the vocab/corpus from the matching row above:
@@ -1159,23 +1106,17 @@ each time, using the vocab/corpus from the matching row above:
 | 50.0 MB | 10,386,801 | ~40 MB | ~966 MB | 3.3 MB |
 | 100.0 MB | 20,773,601 | ~79 MB | ~1.83 GB | 3.3 MB |
 
-**TASK-042 added the last two rows** (previously skipped: "a full training
-run at that size takes long enough that the tokeniser-training numbers
-already make the point" - true for training itself, but not for peak RAM,
-which is worth its own data point). Peak RAM tracks corpus size closely at
-this size, and closely matches the *tokeniser's* own 16-bytes-per-input-byte
-formula (50 MB → ~800 MB predicted, ~966 MB measured; 100 MB → ~1.6 GB
-predicted, ~1.83 GB measured) - because `PretrainCli` bulk-encodes the
-corpus via the same `BpeTokeniser.EncodeBulk` path stage 1's training uses
-internally, before training itself ever starts. **This is the single
-biggest lever for keeping a training chunk within a RAM budget**: at this
-project's toy model sizes, a large corpus chunk's own encoding cost
-dominates everything the model or training loop itself does. Extrapolating
-from this same mechanism (not independently re-measured, to avoid pushing
-this development machine's RAM right to its limit twice for the same
-underlying cost) - a 400 MB corpus chunk would cost roughly the ~7.8 GB the
-tokeniser-training table above already measured for 400 MB, since both go
-through the same encoding path.
+Peak RAM tracks corpus size closely, and closely matches the tokeniser's
+own 16-bytes-per-input-byte formula (50 MB → ~800 MB predicted, ~966 MB
+measured; 100 MB → ~1.6 GB predicted, ~1.83 GB measured). The reason:
+`PretrainCli` bulk-encodes the corpus via the same `BpeTokeniser.EncodeBulk`
+path stage 1's training uses internally, before training itself ever
+starts. **This is the single biggest lever for keeping a training chunk
+within a RAM budget**: at this project's toy model sizes, a large corpus
+chunk's own encoding cost dominates everything the model or training loop
+itself does. By the same mechanism, a 400 MB corpus chunk costs roughly
+the ~7.8 GB the tokeniser-training table above measured for 400 MB, since
+both go through the same encoding path.
 
 **What else drives peak RAM, holding a fixed 5 MB corpus chunk and
 sweeping one architecture parameter at a time from the same 4-layer,
@@ -1217,127 +1158,48 @@ output artifacts (`vocab.bpe`, `model.checkpoint`) stay a *constant* size
 across every row - they're sized by vocabulary/architecture, not by how
 much text produced them.
 
-**This table used to show peak RAM scaling linearly with input size, at
-roughly 78 MB per MB of input text** (2 MB → ~216 MB, 4 MB → ~365 MB,
-10 MB → ~840 MB) **- TASK-029 fixed the root cause, and these are the
-re-measured numbers after that fix.** The bug was real: `BpeTokeniser.Train`
-and `EncodeBulk` both went through `LinkedTokenStream.Build`, which read an
-entire input file via `File.ReadAllText` into one heap-resident string
-before anything reached disk-backed storage - unreclaimable managed-heap
-memory, proportional to file size, sitting there for the whole build. The
-fix (`PreTokeniser.Split(TextReader, bufferSize)`) reads and chunks the
-file incrementally in bounded blocks instead, holding back only an actual
+**Why this design matters, contrasted with the obvious naive approach:** a
+straightforward tokeniser implementation would read an entire input file
+via `File.ReadAllText` into one heap-resident string before doing
+anything else - simple to write, but unreclaimable managed-heap memory
+proportional to file size, sitting there for the whole build. At 100 MB
+of input text that naive approach would extrapolate to roughly 18 GB of
+peak RAM, enough to trouble a typical desktop. This project's tokeniser
+avoids that: `PreTokeniser.Split(TextReader, bufferSize)` reads and chunks
+the file incrementally in bounded blocks, holding back only an actual
 in-progress chunk (never more than one real word/run's worth of text)
-across block boundaries - `Build` now runs two streaming passes instead of
-one in-memory pass: a cheap first pass to count exact total bytes (sizing
-the `MappedArray<T>`s precisely, no over-allocation), then a second pass to
-fill them.
+across block boundaries. `LinkedTokenStream.Build` runs two streaming
+passes instead of one in-memory pass: a cheap first pass to count exact
+total bytes (sizing the `MappedArray<T>`s precisely, no over-allocation),
+then a second pass to fill them.
 
-**Compared side by side, at 10 MB: ~840 MB peak RAM before, ~373 MB after**
-for tokeniser training - the fix roughly halved it at this size, and the
-gap widens with input size (the old code's growth was linear all the way
-up; a 100 MB corpus under the old code would have extrapolated to roughly
-18 GB, genuinely enough to trouble a typical desktop - the new code stays
-under 2 GB at that same size). **Peak RAM still isn't perfectly flat**, and
-that's expected, not a leftover version of the same bug: the
-`Token`/`Next`/`Prev`/`PairNext` arrays are memory-mapped, but their pages
-only become resident as `Build` actually writes into them, so the *active
-working set* while filling a large corpus's worth of disk-backed arrays
-still tracks corpus size too - just as `EstimateScratchBytes`'s existing
-16-bytes-per-input-byte formula already predicts (100 MB × 16 bytes ≈
-1.6 GB, close to the ~1.8 GB measured). The difference that actually
-matters: those pages are *reclaimable* by the OS under memory pressure
-(dropped if clean, written back if dirty) the same way any memory-mapped
-file's pages are, unlike the old unreclaimable heap string - which is
-exactly what the disk-backed design was supposed to buy in the first
-place, and now genuinely does.
+**Peak RAM still isn't perfectly flat**, and that's expected, not a gap in
+the design: the `Token`/`Next`/`Prev`/`PairNext` arrays are memory-mapped,
+but their pages only become resident as `Build` actually writes into them,
+so the *active working set* while filling a large corpus's worth of
+disk-backed arrays still tracks corpus size too - just as
+`EstimateScratchBytes`'s 16-bytes-per-input-byte formula predicts
+(100 MB × 16 bytes ≈ 1.6 GB, close to the ~1.8 GB measured). The
+difference that actually matters: those pages are *reclaimable* by the OS
+under memory pressure (dropped if clean, written back if dirty) the same
+way any memory-mapped file's pages are, unlike an unreclaimable heap
+string - exactly what the disk-backed design is meant to buy.
 
 ## Project status
 
 Every stage above (1 through 12, including both optional `--optimised` and
-`--gpu` backends) is built, tested, and runnable today — see
-[TASK.md](TASK.md) for the task-by-task history and [PLAN.md](PLAN.md)'s
-"Known limitations / deferred" section for the trade-offs (not bugs) that
-were deliberately made along the way. Distributed (multi-machine) training
-remains out of scope for now - not planned or tasked, though revisitable if
-asked, the same way single-GPU execution (stage 11) just was; single-GPU
-execution is no longer out of scope the way it once was. Stage 12
-(incremental training within a fixed RAM budget) is now complete:
-`--resume-from-checkpoint` (TASK-040) is built, tested, and runnable
-today, and TASK-041 confirmed the tokeniser's own RAM bound holds at
-200 MB/400 MB, and that retraining the vocabulary per chunk isn't needed
-at all (byte-level BPE already generalises to unseen text). TASK-042
-measured what actually drives one training chunk's peak RAM (corpus chunk
-size dominates, well ahead of context length, batch size, or model
-width). TASK-043 chained three real corpus chunks end to end via a
-documented shell loop and confirmed peak RAM stays flat regardless of how
-many chunks came before - stage 12 is now complete.
+`--gpu` backends) is built, tested, and runnable today. Distributed
+(multi-machine) training is out of scope - everything here runs on one
+machine, whether that machine's `Tensor` ops run on its CPU (default, or
+stage 8's parallel CPU path) or its GPU (stage 11).
 
-The caveat that used to be repeated here — that the chat CLI doesn't
-apply stage 9's prompt template or know when a response has "finished" —
-is closed as of TASK-027/TASK-028: `--instruction-tuned` wraps each turn
-in the exact template `SftDataset` uses and halts generation at the next
-turn boundary instead of running on, and `--context-length` gives control
-over how much conversation history is kept independent of the model's own
-fixed `MaxSequenceLength`. What's still true, and isn't a bug: this
-project's toy-sized demo models (tens of thousands of parameters, a few
-hundred training steps, a few KB of corpus) are there to show each
-mechanism working end to end, not to produce fluent or reliably on-topic
-conversation — see stage 10's own transcripts for exactly what that looks
-like in practice, warts included. TASK-029 fixed the memory/disk footprint
-section's main finding: `File.ReadAllText` no longer holds an entire
-corpus file on the unreclaimable managed heap during tokeniser
-training/bulk-encoding (see the footprint section above for the
-re-measured numbers, and for what still is not perfectly flat, and why).
-TASK-030 closed the SFT CLI scaling gap: `--epochs` (default 3)
-sizes a training run from dataset size automatically - each epoch a
-freshly shuffled full pass - instead of requiring `--batch-size` hand-tuned
-to match the dataset the way the 6-example demo used to need; `--steps`
-remains as a lower-level, unshuffled escape hatch, mutually exclusive with
-`--epochs`.
-
-TASK-031/032/033 added stage 11's optional GPU backend (ILGPU) - working,
-tested, and demonstrated on real GPU hardware after a follow-up fix. The
-first version of this section carried a caveat that the GPU used for
-testing could not be reached at all. This was true at the time, and the
-cause was one missing OS package (`ocl-icd-devel`, which provides the
-unversioned `libOpenCL.so` symlink .NET's native-library search needs;
-the runtime library alone, already installed, was not enough). Installing
-this package fixed detection at once, with no code change - this is what
-`GpuContext`'s "prefer a real accelerator whenever one is reported" design
-was meant to make possible. Measured again on real GPU hardware via
-OpenCL: at this README's toy demo scale, GPU execution takes about the
-same time as both CPU paths (see stage 11's table). This is not a large
-win, since kernel-launch and transfer overhead still dominate the actual
-compute at this size. It replaces the earlier "GPU was slower" finding,
-which no longer holds now that a real GPU is reachable.
-
-TASK-034/035/036 followed up on stage 11 once the numbers above showed the
-GPU running about even with the CPU paths, rather than a clear win. The
-cause: `MatMulGpu` allocated, transferred, and freed device buffers on
-every single matmul call. TASK-034 added device-resident tensor storage.
-TASK-035 changed matmul to reuse an operand already resident on the
-device, instead of re-uploading it - its output is deliberately not made
-resident too, since that would make every other op fall back to a slow,
-per-element device round trip. TASK-036 wired this into a
-`--gpu-resident-weights` flag and measured the result: **training became
-about 37 times slower, not faster**. The cause: `Transpose` in the
-backward pass, and the optimizer's weight update, were not
-device-resident-aware, and paid that same per-element cost on every
-resident parameter, every step. See stage 11 for the numbers and the full
-explanation.
-
-TASK-037/038/039 closed that gap: `Transpose`, the elementwise ops, and
-the optimizer's in-place weight update now each have a device-resident
-code path. Re-measured: `--gpu-resident-weights` got slower still, not
-faster - about 91 times slower than plain `--gpu`, up from about 37 times.
-The cause: the optimizer's weight update reads a delta value that is
-never itself GPU-resident, so its new device-resident kernel still
-allocates and frees a fresh device buffer on every call, and on this
-project's GPU and driver that allocation costs more than the per-element
-fallback it replaced. `AdamWOptimizer`'s moment estimates were
-deliberately not moved to GPU residency either, since the same
-measurement shows that would only add more of the same cost, not remove
-it. See stage 11 for the full numbers and explanation. See TASK.md for
-the full task-by-task history if scaling to a much larger corpus or
-dataset (hundreds of MB, thousands of examples) raises something new.
+A note on what to expect from stage 10's chat CLI: this project's demo
+models (tens of thousands of parameters, a few hundred training steps, a
+few KB of corpus) are toy-sized, deliberately, so each mechanism can be
+seen working end to end in seconds rather than hours. That means they
+show each mechanism working, not fluent or reliably on-topic conversation
+- see stage 10's own transcripts for exactly what that looks like in
+practice, warts included. Scale the architecture flags up (and reach for
+stage 8's `--optimised` or stage 11's `--gpu`, or stage 12's chunked
+training for a corpus too large for one run) for a model that produces
+more coherent text.

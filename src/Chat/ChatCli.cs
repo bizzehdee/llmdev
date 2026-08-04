@@ -41,7 +41,7 @@ public static class ChatCli
             stdout.WriteLine("This is a raw next-token-prediction model, not an instruction-tuned assistant: it will");
             stdout.WriteLine("continue text in the style of whatever it was trained on, not necessarily answer questions");
             stdout.WriteLine("or follow instructions, unless the training corpus was itself shaped like dialogue, or");
-            stdout.WriteLine("--instruction-tuned is passed for a checkpoint that went through the SFT stage (TASK-016).");
+            stdout.WriteLine("--instruction-tuned is passed for a checkpoint that went through instruction tuning (see the Sft CLI).");
             return 1;
         }
 
@@ -128,7 +128,7 @@ public static class ChatCli
             ? "Loaded model and vocabulary. Instruction-tuned mode: each turn is wrapped in the same"
             : "Loaded model and vocabulary. This is a raw next-token-prediction model, not an");
         stdout.WriteLine(instructionTuned
-            ? "prompt template the model was fine-tuned on (TASK-016), and generation stops at the next"
+            ? "prompt template the model was fine-tuned on, and generation stops at the next"
             : "instruction-tuned assistant: it will continue text in the style of whatever it was");
         stdout.WriteLine(instructionTuned
             ? "turn boundary instead of running on."
