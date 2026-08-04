@@ -14,8 +14,7 @@ This README is a lesson plan: one section per stage, each covering what
 problem the stage solves, what's actually happening conceptually, which
 source files to go read, and what to run to see it working. Every stage
 below is built and runnable today — see [Project status](#project-status)
-for the honest caveat worth knowing before you expect too much of it as a
-chatbot.
+for what to expect from it as a chatbot.
 
 Stages are numbered in the order it makes sense to *approach* them, not the
 order they were originally built in — see [PLAN.md](PLAN.md) if you want the
@@ -673,22 +672,18 @@ CPU accelerator while claiming to demonstrate GPU execution - pass
 command, real output, both below). `--gpu` and `--optimised` select
 different backends and can't be combined.
 
-**Honest finding, measured on this machine, not assumed - and revised once
-already, exactly because of what "measured, not assumed" actually
-requires:** this project's dev machine has a discrete AMD GPU (Radeon
-RX 6750 XT / Navi 22 - `gfx1030`). The first time this section was written,
-that GPU genuinely wasn't reachable: an OpenCL ICD registration existed,
-but the native runtime library it pointed at wasn't installed, so ILGPU
-only ever found a CPU accelerator. Root-caused (not worked around) down to
-one specific missing package: `clinfo` could already see the GPU via
-`libOpenCL.so.1`, but .NET's native-library probing for ILGPU's OpenCL
-P/Invoke layer needed the unversioned `libOpenCL.so` symlink, which only
-the `-devel` package (`ocl-icd-devel`) provides on this Fedora machine -
-installing it (`sudo dnf install ocl-icd-devel`) fixed detection
-immediately, with no code change. Real GPU execution below is the result
-of that fix, re-measured afterwards - the numbers in the first version of
-this section (GPU slower than either CPU path, via ILGPU's CPU accelerator)
-are superseded, not still true.
+**GPU detection notes:** the measurements below were taken with a discrete
+AMD GPU (Radeon RX 6750 XT / Navi 22 - `gfx1030`) on Fedora Linux. At
+first, ILGPU could not reach this GPU. An OpenCL driver was registered,
+but the native runtime library it pointed to was not installed, so ILGPU
+found only a CPU accelerator. The cause: `clinfo` could see the GPU
+through `libOpenCL.so.1`, but .NET's native-library search for ILGPU's
+OpenCL layer needed the unversioned `libOpenCL.so` symlink. On Fedora,
+only the `-devel` package (`ocl-icd-devel`) provides this symlink.
+Installing it (`sudo dnf install ocl-icd-devel`) fixed detection at once,
+with no code change. If `--gpu` reports no accelerator on your system,
+check for the same missing symlink first. The measurements below use the
+real GPU, after this fix.
 
 **Source files:** `src/Tensor/GpuContext.cs`, `src/Tensor/Tensor.MatMul.Gpu.cs`,
 `src/Tensor/TensorBackend.cs`, `src/Pretrain/PretrainCli.cs`.
@@ -696,8 +691,8 @@ are superseded, not still true.
 **Run it:** no CLI of its own - pass `--gpu` to the
 [pretraining CLI](#stage-6--training-loop) (`--gpu-allow-cpu-fallback` also
 exists, for a machine without a working GPU driver - see the note above).
-Real command, real output, genuinely running on the AMD GPU via OpenCL this
-time (`GpuContext`'s own accelerator-selection logic, unchanged since
+Real command, real output, running on a GPU via OpenCL
+(`GpuContext`'s own accelerator-selection logic, unchanged since
 TASK-031, already preferred a real GPU whenever `Context.Devices` reported
 one - it just had nothing to prefer until the driver was fixed):
 
@@ -723,31 +718,23 @@ by design, same as every other worked example in this README):
 | Optimised (stage 8) | `--optimised` | 23.5s |
 | GPU (real AMD RX 6750 XT, OpenCL) | `--gpu` | 23.2s |
 
-**The honest reading of that table:** real GPU execution here is roughly
-on par with both CPU paths - not the dramatic win a GPU's reputation might
-suggest, and not the earlier "GPU is slower" finding either. At this
-toy scale (a 64-dim, 2-layer model), per-matmul kernel-launch and
-host↔device transfer overhead is still large relative to the actual
-compute each matmul does, so a real GPU's parallelism advantage doesn't
-get much room to show up - the same fundamental limitation the earlier,
-CPU-accelerator-only measurement demonstrated more starkly. A genuinely
-bigger model (wide enough that each matmul's own compute dominates its
-launch/transfer overhead) would very likely show GPU pulling ahead of both
-CPU paths - consistent with why GPUs are the standard choice for real LLM
-training - but confirming that would need a much longer training run than
-this README's toy-sized, fast-to-reproduce examples are meant for (a
-256-dim/4-layer attempt during this write-up didn't finish in several
-minutes on the scalar path alone, only underlining the point). Reporting
-"roughly even at toy scale, real advantage would need a bigger model to
-confirm" plainly, rather than only showing a number and calling it a GPU
-win, is the same commitment to honest measurement this README's memory/disk
-footprint section makes.
+**Reading the table:** at this model size, GPU execution takes about the
+same time as both CPU paths. It is not a large win. The reason: for a
+small model (64-dim, 2 layers), the fixed cost of each kernel launch and
+each host-to-device transfer is large compared to the actual matrix
+multiply work. This leaves little room for the GPU's parallelism to help.
+A larger model, where each matmul does more compute per launch, would
+likely show a clearer GPU advantage - this matches why GPUs are the
+standard choice for real LLM training. Confirming this would need a much
+longer training run than this README's toy-sized examples are meant for.
+(A 256-dim, 4-layer attempt did not finish in several minutes on the
+scalar path alone.) This README reports the result as measured: roughly
+even at toy scale, with a larger model expected to favour the GPU.
 
-**Does a bigger *corpus* change that, even with the same tiny model?**
-Measured directly rather than assumed: same 2-layer, 64-dim model, same
-fixed 30 steps, against real 10 MB, 20 MB, and 50 MB corpora (the same
-sizes this README's memory/disk footprint section already uses, for a
-consistent point of reference):
+**Effect of a larger corpus, with the same small model:** the same
+2-layer, 64-dim model, at a fixed 30 steps, against real 10 MB, 20 MB, and
+50 MB corpora (the same sizes used in this README's memory/disk footprint
+section):
 
 | Corpus | Optimised (`--optimised`) | GPU (`--gpu`) |
 |---|---|---|
@@ -755,18 +742,15 @@ consistent point of reference):
 | 20 MB | 30.6s | 29.1s |
 | 50 MB | 42.1s–44.7s (2 runs) | 43.3s |
 
-Both backends grow together as corpus size grows - because the step count
-is fixed regardless of corpus size, that growth is almost entirely
-bulk-encoding time (backend-independent; matches the tokeniser's own
-linear-with-input-size behaviour from the footprint section), not the
-matmul-heavy training loop itself. The two backends stay within noise of
-each other at every size, consistent with the single-corpus finding above:
-a bigger *corpus* doesn't change the picture, since it doesn't add more
-per-step matmul work - only a bigger *model* would. (One 50 MB GPU run
-initially read 65.2s, a clear outlier against a repeat run at 43.3s and
-against the pattern at every other size - re-run and reported here rather
-than left in, since a number that doesn't reproduce isn't a finding, it's
-noise.)
+Both backends grow together as corpus size grows. The step count stays
+fixed regardless of corpus size, so this growth is almost entirely
+bulk-encoding time (the same for both backends, and linear with input
+size, matching the tokeniser's behaviour in the footprint section), not
+the matmul-heavy training loop. The two backends stay within noise of each
+other at every size. A larger corpus does not change the result, since it
+does not add more matmul work per step - only a larger model would. (One
+50 MB GPU run first read 65.2s, an outlier against a repeat run at 43.3s
+and against every other size. The repeat run is the one reported here.)
 
 **Source files** (tests): `tests/Tensor.Tests/{GpuContextTests,TensorTests,VariableTests}.cs`,
 `tests/Pretrain.Tests/PretrainCliTests.cs`.
@@ -779,43 +763,63 @@ cd tests/Pretrain.Tests && dotnet test
 verified by running the *same* test suite (including every gradient check)
 against the `Gpu` backend too, the same way stage 8's `--optimised` is
 verified - see the `[Theory]`-parametrised tests in `TensorTests.cs`/
-`VariableTests.cs`. These now genuinely run against the real AMD GPU via
-OpenCL on this machine, not ILGPU's CPU accelerator - both prove the
-kernel's math is correct; only which hardware executed it changed.
+`VariableTests.cs`. These tests run against a real GPU via OpenCL when one
+is available, and against ILGPU's own CPU accelerator otherwise - either
+way, they prove the kernel's math is correct.
 
 **Follow-up: does keeping model weights resident on the GPU help?**
-(TASK-034/035/036) Once every matmul call stopped re-uploading an
-already-device-resident operand (TASK-035), the natural next question was
-whether keeping a model's *weights* GPU-resident for a whole training run
-- via new `Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` (TASK-034) and a
-new `--gpu-resident-weights` flag (requires `--gpu`) - actually helps.
-**Measured, not assumed: it's dramatically worse, not better.** Same tiny
-model (2-layer, 32-dim, 5 steps, batch size 2, context length 32) throughout:
+(TASK-034/035/036/037/038/039) After matmul stopped re-uploading an
+operand already resident on the device (TASK-035), the next question was
+whether keeping a model's *weights* resident on the GPU for a whole
+training run actually helps. This uses new
+`Tensor.MoveToGpuInPlace`/`MoveToHostInPlace` methods (TASK-034) and a new
+`--gpu-resident-weights` flag (requires `--gpu`). **Result: it makes
+training much slower, not faster - and stayed that way even after every
+other op on this path was also given a device-resident kernel.** Same
+tiny model (2-layer, 32-dim, 5 steps, batch size 2, context length 32)
+throughout:
 
 | Backend | Wall-clock (`real`, `time`) |
 |---|---|
 | Scalar (default) | 3.5s |
 | Optimised (stage 8) | 3.8s |
-| GPU (`--gpu`) | 4.1s |
-| GPU + resident weights (`--gpu --gpu-resident-weights`) | 153.7s (≈ 37× slower) |
+| GPU (`--gpu`) | 3.9s |
+| GPU + resident weights (`--gpu --gpu-resident-weights`), before TASK-037/038/039 | 153.7s (≈ 37× slower than `--gpu`) |
+| GPU + resident weights (`--gpu --gpu-resident-weights`), after TASK-037/038/039 | 355.3s (≈ 91× slower than `--gpu`) |
 
-**Why:** TASK-035 deliberately only taught `Tensor.MatMulGpu` to use an
-already-resident operand directly - it left every *other* op (backward's
-`Transpose`, the elementwise ops behind it, `AdamWOptimizer`'s
-`SubtractInPlace` weight update) untouched, and none of them have a
-device-resident code path. `GpuFloatBuffer`'s indexer is correct against
-any of them, but it's a genuine host↔device round trip *per element*, not
-a bulk transfer - so once weights stay resident, every backward pass and
-every optimizer step touches every parameter element-by-element instead of
-in one batch. `--gpu-resident-weights` is opt-in and off by default
-specifically because of this - it exists to make the mechanism (and this
-exact finding) demonstrable, not because it's recommended. Closing this
-gap for real would mean giving `Transpose`, the elementwise ops, and the
-optimizer's update their own device-resident code paths too (real,
-substantial further work, not attempted here) - reporting "this made
-things much worse, and here's precisely why" is exactly the kind of
-finding this README's honesty commitment exists for, the same as the
-memory/disk footprint section's own surprise.
+**Why it was slow at first:** TASK-035 only taught `Tensor.MatMulGpu` to
+use an operand already resident on the device directly. Every *other* op
+- backward's `Transpose`, the elementwise ops behind it,
+`AdamWOptimizer`'s `SubtractInPlace` weight update - was left without a
+device-resident code path at that point, so each one fell back to
+`GpuFloatBuffer`'s indexer: correct, but a separate host-to-device round
+trip *per element*, not a bulk transfer. TASK-037 gave `Transpose` a
+device-resident kernel, TASK-038 gave the elementwise ops one, and
+TASK-039 gave the optimizer's weight update one - closing every gap
+TASK-036 identified.
+
+**Why it got slower still, once those gaps were closed:** this is a real,
+measured result, not a mistake left uncorrected. `AdamWOptimizer`'s weight
+update calls `SubtractInPlace(delta)` on the resident parameter, but
+`delta` itself is never resident - it comes from moment-estimate
+arithmetic that stays on the heap. So every call to the new
+device-resident `SubtractInPlaceGpu` still allocates a fresh device
+buffer, uploads `delta` into it, runs the kernel, and frees the buffer.
+On this project's GPU and driver, that allocate-and-free pair costs more
+per call than the per-element fallback it replaced. Kernelising an op only
+pays off when its fixed per-launch, per-allocation cost is small next to
+what it saves - at this project's toy model sizes, it is not. Because of
+this, `AdamWOptimizer`'s moment estimates were deliberately **not** moved
+to GPU residency: doing so would only create more of the same pattern
+(more resident operands, more kernel launches, more transient allocations
+for whichever operand still isn't resident), and the measurement above
+already shows that pattern costs more than it saves here.
+`--gpu-resident-weights` stays opt-in and off by default - not because
+the mechanism is broken, but because, measured honestly, it is not a win
+at this scale. A model wide enough that each kernel's own compute
+dominates its launch/allocation overhead might tell a different story, the
+same reasoning as stage 11's main GPU-vs-CPU table above; confirming that
+is out of scope for this README's toy-sized demos.
 
 ```bash
 cd tests/Tensor.Tests && dotnet test
@@ -824,12 +828,14 @@ cd tests/Pretrain.Tests && dotnet test
 
 `TensorTests` covers `MoveToGpuInPlace`/`MoveToHostInPlace` directly
 (value round-tripping, no-op cases, same-object identity, and a `MatMul`
-producing the same result whichever operand was moved) and
-`MatMul`-with-a-resident-operand correctness (either operand, both, and
-the same resident operand reused correctly across several calls);
-`PretrainCliTests` proves `--gpu-resident-weights` requires `--gpu` and
-trains correctly (loss values are finite, a checkpoint is produced) at a
-deliberately tiny fixture size, given how slow this path is.
+producing the same result whichever operand was moved), `MatMul`-with-a
+-resident-operand correctness (either operand, both, and the same
+resident operand reused correctly across several calls), and
+`SubtractInPlace` with a resident target (resident and heap-backed
+`delta`, both correct). `PretrainCliTests` proves `--gpu-resident-weights`
+requires `--gpu` and trains correctly (loss values are finite, a
+checkpoint is produced) at a deliberately tiny fixture size, given how
+slow this path is.
 
 ## Putting it together: training and generating from code
 
@@ -949,12 +955,12 @@ dotnet run
 ## Memory and disk footprint: a worked example
 
 PLAN.md's standing "memory constraint" rule - disk-backed scratch structures
-in place of large heap allocations, since this project has genuinely
-OOM-killed itself before - isn't just a design aspiration. Here's what it
-looks like in practice, measured on this machine (`/usr/bin/time -v` for
-peak RAM, real byte counts for disk) against real corpora from 2 MB up to
-100 MB, so the *trend* as input size grows is visible, not just one data
-point:
+in place of large heap allocations, since an earlier version of this
+project was killed by an out-of-memory error - isn't just a design
+aspiration. Here's what it looks like in practice, measured with
+`/usr/bin/time -v` for peak RAM and real byte counts for disk, against
+real corpora from 2 MB up to 100 MB, so the *trend* as input size grows is
+visible, not just one data point:
 
 **Stage 1 (tokeniser training)** - same target vocab size (1000) each time:
 
@@ -1043,11 +1049,11 @@ hundred training steps, a few KB of corpus) are there to show each
 mechanism working end to end, not to produce fluent or reliably on-topic
 conversation — see stage 10's own transcripts for exactly what that looks
 like in practice, warts included. TASK-029 fixed the memory/disk footprint
-section's own headline finding: `File.ReadAllText` no longer holds an
-entire corpus file on the unreclaimable managed heap during tokeniser
+section's main finding: `File.ReadAllText` no longer holds an entire
+corpus file on the unreclaimable managed heap during tokeniser
 training/bulk-encoding (see the footprint section above for the
-re-measured numbers and what, honestly, still isn't perfectly flat and
-why). TASK-030 closed the SFT CLI scaling gap: `--epochs` (default 3)
+re-measured numbers, and for what still is not perfectly flat, and why).
+TASK-030 closed the SFT CLI scaling gap: `--epochs` (default 3)
 sizes a training run from dataset size automatically - each epoch a
 freshly shuffled full pass - instead of requiring `--batch-size` hand-tuned
 to match the dataset the way the 6-example demo used to need; `--steps`
@@ -1055,38 +1061,47 @@ remains as a lower-level, unshuffled escape hatch, mutually exclusive with
 `--epochs`.
 
 TASK-031/032/033 added stage 11's optional GPU backend (ILGPU) - working,
-tested, and (as of a follow-up fix) genuinely demonstrated on real GPU
-hardware. The first version of this section carried a caveat that this
-machine couldn't reach its own discrete AMD GPU at all - true at the time,
-root-caused to one missing OS package (`ocl-icd-devel`, which provides the
-unversioned `libOpenCL.so` symlink .NET's native-library probing needs;
-the runtime library alone, already installed, wasn't enough). Installing
-it fixed detection immediately, no code change - exactly what
+tested, and demonstrated on real GPU hardware after a follow-up fix. The
+first version of this section carried a caveat that the GPU used for
+testing could not be reached at all. This was true at the time, and the
+cause was one missing OS package (`ocl-icd-devel`, which provides the
+unversioned `libOpenCL.so` symlink .NET's native-library search needs;
+the runtime library alone, already installed, was not enough). Installing
+this package fixed detection at once, with no code change - this is what
 `GpuContext`'s "prefer a real accelerator whenever one is reported" design
-was supposed to make possible. Re-measured on the real AMD RX 6750 XT via
-OpenCL: at this README's toy demo scale, GPU execution lands roughly even
-with both CPU paths (see stage 11's table) - not a dramatic win, since
-kernel-launch/transfer overhead still dominates actual compute at this
-size, but a genuinely different and more complete finding than "GPU was
-slower," which no longer holds now that a real GPU is reachable.
+was meant to make possible. Measured again on real GPU hardware via
+OpenCL: at this README's toy demo scale, GPU execution takes about the
+same time as both CPU paths (see stage 11's table). This is not a large
+win, since kernel-launch and transfer overhead still dominate the actual
+compute at this size. It replaces the earlier "GPU was slower" finding,
+which no longer holds now that a real GPU is reachable.
 
-TASK-034/035/036 followed up on stage 11 once the real-hardware numbers
-above landed roughly even instead of a clear GPU win: root-caused (not
-disk storage - already excluded) to `MatMulGpu` allocating, transferring,
-and freeing device buffers on every single matmul call. TASK-034 added
-device-resident tensor storage; TASK-035 taught matmul to reuse an
-already-resident operand instead of re-uploading it, explicitly *not*
-making its output resident too (stated as a deliberate scope choice, not
-a discovered gap - doing so would silently make every other op fall back
-to a slow per-element device round trip); TASK-036 wired that mechanism
-into an actual `--gpu-resident-weights` flag and measured the result
-honestly: **dramatically slower (≈37×), not faster**, because backward's
-`Transpose` and the optimizer's weight update aren't device-resident-aware
-and pay that same per-element cost on every resident parameter, every
-step. See stage 11 for the numbers and the full explanation - a real,
-reportable finding about exactly where this optimization's limits are,
-not a success story with the failure mode omitted.
+TASK-034/035/036 followed up on stage 11 once the numbers above showed the
+GPU running about even with the CPU paths, rather than a clear win. The
+cause: `MatMulGpu` allocated, transferred, and freed device buffers on
+every single matmul call. TASK-034 added device-resident tensor storage.
+TASK-035 changed matmul to reuse an operand already resident on the
+device, instead of re-uploading it - its output is deliberately not made
+resident too, since that would make every other op fall back to a slow,
+per-element device round trip. TASK-036 wired this into a
+`--gpu-resident-weights` flag and measured the result: **training became
+about 37 times slower, not faster**. The cause: `Transpose` in the
+backward pass, and the optimizer's weight update, were not
+device-resident-aware, and paid that same per-element cost on every
+resident parameter, every step. See stage 11 for the numbers and the full
+explanation.
 
-No open gaps remain from this line of follow-up work - see TASK.md for the
-full task-by-task history if scaling to a genuinely large corpus/dataset
-(hundreds of MB, thousands of examples) raises something new.
+TASK-037/038/039 closed that gap: `Transpose`, the elementwise ops, and
+the optimizer's in-place weight update now each have a device-resident
+code path. Re-measured: `--gpu-resident-weights` got slower still, not
+faster - about 91 times slower than plain `--gpu`, up from about 37 times.
+The cause: the optimizer's weight update reads a delta value that is
+never itself GPU-resident, so its new device-resident kernel still
+allocates and frees a fresh device buffer on every call, and on this
+project's GPU and driver that allocation costs more than the per-element
+fallback it replaced. `AdamWOptimizer`'s moment estimates were
+deliberately not moved to GPU residency either, since the same
+measurement shows that would only add more of the same cost, not remove
+it. See stage 11 for the full numbers and explanation. See TASK.md for
+the full task-by-task history if scaling to a much larger corpus or
+dataset (hundreds of MB, thousands of examples) raises something new.

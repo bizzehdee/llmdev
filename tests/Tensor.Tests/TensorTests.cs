@@ -1276,6 +1276,63 @@ public class TensorTests
         Assert.Throws<InvalidOperationException>(() => t.SubtractInPlace(delta));
     }
 
+    // TASK-039: device-resident SubtractInPlace - the specific op
+    // AdamWOptimizer's update calls on a (potentially resident) parameter
+    // that TASK-038 didn't cover (a separate in-place-mutation method,
+    // not one of ElementwiseBinary's derived ops).
+
+    [Fact]
+    public void SubtractInPlace_GpuResidentTarget_GpuResidentDelta_MutatesCorrectly()
+    {
+        using var t = Tensor.FromValues([10, 20, 30], [3]);
+        t.MoveToGpuInPlace();
+        using var delta = Tensor.FromValues([1, 2, 3], [3]).ToGpu();
+
+        t.SubtractInPlace(delta);
+
+        Assert.True(t.IsGpuResident);
+        Assert.Equal(new float[] { 9, 18, 27 }, t.ToArray());
+    }
+
+    [Fact]
+    public void SubtractInPlace_GpuResidentTarget_HeapBackedDelta_MutatesCorrectly()
+    {
+        // The realistic case for --gpu-resident-weights: the computed
+        // update (delta) is heap-backed (derived from heap-backed
+        // gradients/moments), but the parameter it's applied to is
+        // GPU-resident - still must produce the correct result via one
+        // kernel launch, not per-element access.
+        using var t = Tensor.FromValues([10, 20, 30], [3]);
+        t.MoveToGpuInPlace();
+        using var delta = Tensor.FromValues([1, 2, 3], [3]);
+
+        t.SubtractInPlace(delta);
+
+        Assert.True(t.IsGpuResident);
+        Assert.Equal(new float[] { 9, 18, 27 }, t.ToArray());
+    }
+
+    [Fact]
+    public void SubtractInPlace_HeapBackedTarget_StillUsesScalarPath()
+    {
+        using var t = Tensor.FromValues([10, 20, 30], [3]);
+        using var delta = Tensor.FromValues([1, 2, 3], [3]);
+
+        t.SubtractInPlace(delta);
+
+        Assert.False(t.IsGpuResident);
+        Assert.Equal(new float[] { 9, 18, 27 }, t.ToArray());
+    }
+
+    [Fact]
+    public void SubtractInPlace_GpuResidentTarget_ShapeMismatchThrows()
+    {
+        using var t = Tensor.ZerosOnGpu([2, 2]);
+        using var delta = Tensor.Zeros([4]);
+
+        Assert.Throws<InvalidOperationException>(() => t.SubtractInPlace(delta));
+    }
+
     [Fact]
     public void LoadInPlace_OverwritesBufferDirectly()
     {

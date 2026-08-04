@@ -1605,7 +1605,7 @@ real measurement says so.
   AMD GPU via OpenCL. Solution-wide: 475 tests passing; `Tensor.Tensor` at
   98.2% branch coverage.
 
-- [ ] TASK-039: Re-wire `--gpu-resident-weights` to use TASK-037/038's
+- [x] TASK-039: Re-wire `--gpu-resident-weights` to use TASK-037/038's
   on-device ops instead of falling back to the slow indexer, decide
   whether `AdamWOptimizer`'s per-parameter moment estimates should also
   become device-resident (open question: keeping moments resident too
@@ -1622,6 +1622,108 @@ real measurement says so.
   reportable a result as a genuine speedup, and must not be smoothed over
   in favour of a flattering headline.
   Depends on: TASK-037, TASK-038, TASK-036
+
+  **Done - re-measured and it's worse, not better, and that's reported
+  plainly:** added `Tensor.InPlace.Gpu.cs`'s `SubtractInPlaceGpu` (a new
+  device-resident kernel for `SubtractInPlace`, following the same
+  cached-kernel pattern as `MatMulGpu`/`TransposeGpu`), wired into
+  `SubtractInPlace` when the target is `GpuFloatBuffer`-backed - the
+  specific op TASK-036 identified as still using the slow indexer.
+  Re-measured at TASK-036's exact parameters (2-layer, 32-dim, 5 steps,
+  batch size 2, context length 32): scalar 3.5s, optimised 3.3s, GPU 3.9s,
+  GPU + resident weights **355.3s (≈91× slower than plain `--gpu`)** - up
+  from TASK-036's ≈37×/153.7s, not down. Root-caused, not left as a
+  mystery: `SubtractInPlaceGpu`'s `delta` argument (the computed update)
+  is never itself GPU-resident, since it comes from `AdamWOptimizer`'s
+  heap-backed moment-estimate arithmetic - so every call still allocates a
+  fresh transient device buffer, uploads into it, launches the kernel, and
+  frees it. On this project's GPU/driver combination, that allocate-and-
+  free pair costs more per call than the per-element indexer fallback it
+  replaced. **Decision on moving `AdamWOptimizer`'s moments to GPU
+  residency: no**, made from this measurement rather than a guess - moving
+  them resident would only create more resident operands feeding more
+  kernel launches and more transient allocations for whichever operand
+  still isn't resident, the exact pattern just shown to cost more than it
+  saves, not less. `--gpu-resident-weights` remains opt-in, off by
+  default, and is now documented as a worked example of device residency
+  *not* paying off at this project's toy scale, not silently left as an
+  apparent success. Updated README.md (stage 11's resident-weights table
+  and explanation, Project status) and PLAN.md (stage 11's follow-up
+  note) with the final numbers and reasoning.
+  Tests: `SubtractInPlace_GpuResidentTarget_GpuResidentDelta_MutatesCorrectly`,
+  `SubtractInPlace_GpuResidentTarget_HeapBackedDelta_MutatesCorrectly`,
+  `SubtractInPlace_HeapBackedTarget_StillUsesScalarPath`,
+  `SubtractInPlace_GpuResidentTarget_ShapeMismatchThrows` added to
+  `TensorTests.cs`, run against the real GPU via OpenCL. Solution-wide:
+  457 tests passing.
+
+- [ ] TASK-040: Add a way for `PretrainCli` to load an existing checkpoint
+  and continue training it on further corpus data, instead of always
+  building a fresh model. This is the actual gap blocking chunked/
+  compounding training (stage 12) - without it, there is no way to train
+  on more data than fits in one run regardless of RAM. Likely shape: a
+  `--resume-from-checkpoint <path>` flag, loaded via the existing
+  `ModelCheckpoint.Load` alongside the existing vocab/architecture
+  handling, replacing the current always-fresh `GptModel` construction
+  when supplied. Open question to resolve before implementation, not
+  pre-decided: does `ModelCheckpoint` currently round-trip
+  `AdamWOptimizer`'s per-parameter moment estimates (`_firstMoment`/
+  `_secondMoment`), or only model weights? If only weights, resuming today
+  would silently restart the optimizer's moments from zero each time,
+  which changes training dynamics - state this explicitly either way, and
+  decide (from what the checkpoint format actually needs, not a
+  convenience shortcut) whether moment state needs to be added to the
+  checkpoint as part of this task or deliberately left out with the
+  consequence documented. Architecture flags (`--embedding-dim`,
+  `--layers`, etc.) supplied alongside `--resume-from-checkpoint` must
+  match the loaded checkpoint's own architecture - mismatch is a clear
+  CLI error, not a silent reshape or crash.
+  Required by: TASK-043
+
+- [ ] TASK-041: Measure whether `BpeTokeniser.Train`'s existing disk-backed,
+  scratch-bounded design (TASK-029) genuinely holds its RAM bound at a
+  realistic large-corpus scale - hundreds of MB up to a low number of GB,
+  combined across many files in one `Train` call - not just the sizes
+  already measured in README.md's footprint section (up to 100 MB).
+  Extend that section's existing measurement table with the new sizes,
+  same methodology (`/usr/bin/time -v` for peak RAM). If it holds, no code
+  change is needed here - this project's byte-level BPE design (train once
+  on a representative sample, byte fallback covers unseen text in later
+  chunks) already means incremental/extendable vocab training isn't
+  required, and that reasoning should be stated plainly in README.md
+  rather than left implicit. If peak RAM grows unacceptably past some
+  size, state exactly where and why (which structure stops being
+  disk-backed at that scale) as a new, separate follow-up rather than
+  guessing a fix here.
+  Required by: TASK-043
+
+- [ ] TASK-042: Establish what one training chunk's peak RAM actually
+  depends on (batch size, context length, model width, corpus chunk size)
+  for this project's model sizes, measured directly rather than assumed,
+  so a real demo can size a corpus chunk to a stated RAM budget (the
+  user's example: 8 GB) instead of guessing. Document the relationship
+  (even approximately) in README.md, alongside the existing memory/disk
+  footprint section, as the practical guidance someone would need to pick
+  a chunk size for their own machine.
+  Depends on: TASK-040
+  Required by: TASK-043
+
+- [ ] TASK-043: Demonstrate the full chunked/compounding pipeline
+  end-to-end: split a real corpus into several chunks sized per TASK-042's
+  guidance, train a tokeniser vocabulary once up front (per TASK-041's
+  finding), then train sequentially - first chunk from scratch, each
+  further chunk resumed from the previous chunk's checkpoint via
+  TASK-040 - measuring peak RAM per step and confirming it stays within
+  the stated budget regardless of total corpus size across the whole
+  sequence. Document the result in README.md as a new section (or a stage
+  12 addition, mirroring stage 11's structure): what CLI commands to run
+  (a documented shell loop over the existing `Pretrain` CLI, per PLAN.md's
+  open question - only build a dedicated orchestrating CLI if this
+  demo shows a real need for one), the measured per-chunk RAM, and the
+  explicit trade-off this makes (wall-clock time for RAM, not a
+  distributed/parallel alternative) stated as plainly as stage 11's own
+  GPU findings were.
+  Depends on: TASK-040, TASK-041, TASK-042
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,

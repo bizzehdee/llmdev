@@ -11,12 +11,31 @@ namespace Tensor;
 /// </summary>
 public sealed partial class Tensor
 {
-    /// <summary>this -= delta, element-wise. Used by an optimizer applying a computed update to a parameter.</summary>
+    /// <summary>
+    /// this -= delta, element-wise. Used by an optimizer applying a
+    /// computed update to a parameter.
+    ///
+    /// TASK-039: uses the device-resident kernel path
+    /// (<see cref="SubtractInPlaceGpu"/>) when this tensor is already
+    /// GPU-resident - <see cref="AdamWOptimizer"/>'s update calls this
+    /// directly on a (potentially resident) parameter every step, the
+    /// specific op TASK-036's measurement identified as still falling
+    /// back to the slow per-element indexer after TASK-037/038. Not
+    /// gated on whether <paramref name="delta"/> is also resident - see
+    /// <see cref="SubtractInPlaceGpu"/>'s own doc comment for why that's
+    /// still worth one kernel launch either way.
+    /// </summary>
     public void SubtractInPlace(Tensor delta)
     {
         if (!Shape.SequenceEqual(delta.Shape))
         {
             throw new InvalidOperationException($"Shape mismatch: [{string.Join(",", Shape)}] vs [{string.Join(",", delta.Shape)}].");
+        }
+
+        if (_buffer is GpuFloatBuffer gpuBuffer)
+        {
+            SubtractInPlaceGpu(gpuBuffer, delta);
+            return;
         }
 
         for (int i = 0; i < Length; i++)

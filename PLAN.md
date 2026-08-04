@@ -340,19 +340,89 @@ rather than assuming it fits in RAM:
     which remains open future work if ever revisited, not currently
     planned.
 
-    **Now being revisited, at the user's request, as TASK-037/038/039:**
-    close the gap TASK-036 measured rather than leave it as a documented
-    limitation - give `Transpose` (the single biggest contributor, since
-    `MatMul`'s backward calls it on every weight every step), the
-    elementwise ops (`Add`/`Subtract`/`Multiply`/`Divide`/the unary
-    activations), and `AdamWOptimizer`'s per-parameter update their own
-    device-resident kernels, the same way TASK-032 gave matmul one. Only
-    once all three exist does `--gpu-resident-weights` have a real chance
-    of being a genuine win instead of the ≈37× regression measured today -
-    TASK-039 re-measures honestly once the pieces are in place, prepared
-    to report "still not a win, and here's why" again if that's what a
-    real measurement shows, not committed in advance to a flattering
-    number.
+    **Revisited, at the user's request, as TASK-037/038/039 - resolved,
+    and the answer is still "not a win":** TASK-037 gave `Transpose` a
+    device-resident kernel (the single biggest contributor, since
+    `MatMul`'s backward calls it on every weight every step); TASK-038
+    gave the elementwise ops (`Add`/`Subtract`/`Multiply`/`Divide`/
+    `Scale`/`Sqrt`) the same; TASK-039 gave `AdamWOptimizer`'s
+    `SubtractInPlace` weight update one too, closing the exact set of ops
+    TASK-036 identified. Re-measured at TASK-036's own parameters (5
+    steps): `--gpu-resident-weights` went from ≈37× slower (153.7s) to
+    **≈91× slower (355.3s) than plain `--gpu`** - worse, not better, once
+    all three device-resident kernels were in place. Root cause, measured
+    rather than assumed: `SubtractInPlaceGpu`'s delta operand is never
+    itself GPU-resident (it comes from `AdamWOptimizer`'s heap-backed
+    moment arithmetic), so every call allocates a fresh transient device
+    buffer, uploads to it, launches, and frees it - and on this project's
+    real GPU/driver combination, that allocate/free pair costs more than
+    the entire indexer-based fallback it replaced. Kernelizing an op is
+    only a win when the fixed per-launch/per-allocation cost is small
+    relative to what it saves; at this project's toy model sizes, on this
+    hardware, it isn't. **Decision on moving `AdamWOptimizer`'s moment
+    estimates to GPU residency too: no**, made from this same measurement,
+    not a separate guess - moving the moments resident would only create
+    more opportunities for exactly this pattern (more resident operands,
+    more kernel launches, more transient allocations for the operands that
+    still aren't resident), and the evidence above already shows that
+    pattern costs more than it saves here. `--gpu-resident-weights` stays
+    opt-in, off by default, and now documented as a worked example of when
+    device residency does *not* pay off - see README.md stage 11 for the
+    final numbers.
+
+12. **Incremental / bounded-RAM training pipeline** — a way to train a
+    tokeniser vocabulary and a model on a corpus far larger than fits in
+    RAM at once, by processing it in chunks small enough to fit a stated
+    RAM budget (the user's example: 8 GB), with each chunk's result
+    compounding into the same growing model checkpoint, rather than
+    requiring the whole corpus and the whole training run to fit on one
+    machine at once. Added at the user's explicit request, framed
+    directly as an alternative to needing many machines with large RAM
+    each for a single big training run - this is a bounded-RAM, sequential
+    alternative, not a distributed/parallel one: it trades wall-clock time
+    for RAM, not the other way round, and that trade-off has already been
+    confirmed acceptable.
+
+    **What already exists and does not need new work:** `BpeTokeniser.Train`
+    is already disk-backed and scratch-bounded regardless of corpus size
+    (TASK-029, measured in README.md's footprint section), and this
+    project's tokeniser is byte-level BPE, so a vocabulary trained once
+    already covers any later, unseen text via byte fallback - there is no
+    inherent need to retrain or extend the vocabulary every time a new
+    corpus chunk arrives, only to train it once, up front, on a
+    representative sample.
+
+    **The actual gap:** `PretrainCli` always builds a fresh model and
+    trains it from scratch - there is no way to load an existing
+    checkpoint and continue training it on further data. Without that,
+    "compounding the model file over time" across chunks isn't possible
+    at all today, regardless of RAM. Closing this is the core of this
+    stage; everything else here is measurement and packaging around it.
+
+    **Open questions a real implementation needs to resolve, not
+    pre-decided here:**
+    - Whether the existing bounded-RAM tokeniser training genuinely holds
+      at a realistic large-corpus scale (hundreds of MB to low GB combined
+      across many files in one `Train` call), not just the sizes already
+      measured in the footprint section - measure before assuming it
+      scales further just because the design is disk-backed.
+    - Whether the optimizer's own state (`AdamWOptimizer`'s per-parameter
+      moment estimates) round-trips correctly through a checkpoint
+      save/load cycle, or whether resuming a run today silently restarts
+      the optimizer's moments from zero - this changes training dynamics
+      even if the model weights themselves carry over correctly, and needs
+      to be checked, not assumed either way.
+    - What "one chunk's worth of RAM" actually depends on for this
+      project's toy-to-real model sizes (batch size, context length, model
+      width) versus corpus chunk size, so a real demo can size chunks to a
+      stated RAM budget rather than guessing.
+    - Whether a single orchestrating CLI (looping over chunks itself) or a
+      documented shell-level loop calling the existing `Pretrain` CLI
+      repeatedly is the right shape - leaning toward the latter unless a
+      real need for the former turns up, since the underlying capability
+      (resume-and-continue) is the actual gap, not the looping itself.
+
+    See TASK-040 through TASK-043 for how this is broken down.
 
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage
