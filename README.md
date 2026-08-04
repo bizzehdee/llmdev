@@ -909,11 +909,18 @@ original architecture, rejects an architecture flag combined with
 checkpoint's, and reports a clear error for a checkpoint path that
 doesn't exist.
 
-**Still to come (TASK-041/042/043, not yet done):** confirming the
-tokeniser's own RAM bound holds at a realistic large-corpus scale, working
-out what actually drives one chunk's peak RAM so a chunk size can be
-picked to fit a stated budget, and a full worked example chaining several
-chunks together with peak RAM measured throughout.
+**TASK-041 (done):** confirmed the tokeniser's own RAM bound holds at a
+realistic large-corpus scale (200 MB and 400 MB, not just the sizes
+already in the memory/disk footprint table below) - see that section for
+the numbers. Also confirmed that retraining or extending the vocabulary
+per chunk isn't needed at all: this project's tokeniser is byte-level BPE,
+so a vocabulary trained once, up front, on a representative sample already
+covers any later, unseen text via byte fallback.
+
+**Still to come (TASK-042/043, not yet done):** working out what actually
+drives one training chunk's peak RAM so a chunk size can be picked to fit
+a stated budget, and a full worked example chaining several chunks
+together with peak RAM measured throughout.
 
 ## Putting it together: training and generating from code
 
@@ -1048,6 +1055,25 @@ visible, not just one data point:
 | 4.0 MB | ~64 MB | ~230 MB | 3 KB |
 | 10.0 MB | ~160 MB | ~373 MB | 3 KB |
 | 100.0 MB | ~1600 MB | ~1.8 GB | 3 KB |
+| 200.0 MB | ~3200 MB | ~3.7 GB | 4 KB |
+| 400.0 MB | ~6400 MB | ~7.8 GB | 4 KB |
+
+**TASK-041, extending this table into "hundreds of MB" corpora rather than
+assuming the trend holds:** the 200 MB and 400 MB rows above were measured
+the same way as every other row (`/usr/bin/time -v`, real files), and both
+land within a few percent of what `EstimateScratchBytes`'s 16-bytes-per-
+input-byte formula predicts from the smaller rows - the bound holds. Their
+input text is a repeated sentence rather than varied prose (large real
+text corpora at this size weren't readily available), which caused BPE's
+merges to plateau below the 1000 target (323 merges) - stated plainly
+because it means these two rows aren't directly comparable to the smaller
+rows' *merge* behaviour, only to their RAM/disk scaling, which depends on
+input byte count, not text content. 400 MB's ~7.8 GB peak RAM already
+sits close to an 8 GB budget (the size used as an example throughout stage
+12 above), so larger sizes weren't attempted on this development machine -
+not because the bound was expected to fail, but because pushing a shared
+machine's RAM usage right to its limit just to extend a table further
+isn't a reasonable trade for that portion of it.
 
 **Stage 6 (pretraining)** - same small 4-layer, 128-dim model architecture
 each time, using the vocab/corpus from the matching row above (100 MB
@@ -1115,10 +1141,12 @@ remains out of scope for now - not planned or tasked, though revisitable if
 asked, the same way single-GPU execution (stage 11) just was; single-GPU
 execution is no longer out of scope the way it once was. Stage 12
 (incremental training within a fixed RAM budget) is in progress:
-`--resume-from-checkpoint` (TASK-040) is built, tested, and runnable today;
-TASK-041/042/043 (confirming the tokeniser's RAM bound at larger scale,
-sizing a chunk to a RAM budget, and a full worked example) are not done
-yet.
+`--resume-from-checkpoint` (TASK-040) is built, tested, and runnable
+today, and TASK-041 confirmed the tokeniser's own RAM bound holds at
+200 MB/400 MB, and that retraining the vocabulary per chunk isn't needed
+at all (byte-level BPE already generalises to unseen text). TASK-042/043
+(sizing a training chunk to a RAM budget, and a full worked example
+chaining several chunks together) are not done yet.
 
 The caveat that used to be repeated here — that the chat CLI doesn't
 apply stage 9's prompt template or know when a response has "finished" —

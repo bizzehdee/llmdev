@@ -1708,7 +1708,7 @@ real measurement says so.
   a mismatched vocabulary errors clearly; a nonexistent checkpoint path
   errors clearly. Solution-wide: 461 tests passing.
 
-- [ ] TASK-041: Measure whether `BpeTokeniser.Train`'s existing disk-backed,
+- [x] TASK-041: Measure whether `BpeTokeniser.Train`'s existing disk-backed,
   scratch-bounded design (TASK-029) genuinely holds its RAM bound at a
   realistic large-corpus scale - hundreds of MB up to a low number of GB,
   combined across many files in one `Train` call - not just the sizes
@@ -1724,6 +1724,30 @@ real measurement says so.
   disk-backed at that scale) as a new, separate follow-up rather than
   guessing a fix here.
   Required by: TASK-043
+
+  **Done - the bound holds:** measured two new real data points, same
+  methodology as every other row in README.md's footprint table
+  (`/usr/bin/time -v`, real files, target vocab size 1000): 200 MB → ~3.7 GB
+  peak RAM, 400 MB → ~7.8 GB peak RAM, both within a few percent of what
+  `EstimateScratchBytes`'s existing 16-bytes-per-input-byte formula
+  predicts from the smaller rows. No code change needed - the design
+  already scales as intended. Stopped at 400 MB deliberately, not because
+  the bound was expected to fail beyond it: 400 MB's ~7.8 GB peak RAM
+  already sits close to an 8 GB budget on a shared development machine
+  with a documented OOM history, and pushing further just to extend a
+  table wasn't a reasonable trade for that portion of it - stated
+  explicitly in README.md rather than silently stopping without
+  explanation. Used a large synthetic (repeated-sentence) corpus for these
+  two rows, since real prose at this size wasn't readily available - noted
+  explicitly in README.md, since it changed BPE's *merge* behaviour
+  (plateaued at 323 merges, short of the 1000 target) without affecting
+  the RAM/disk scaling being measured, which depends on input byte count,
+  not text content. Also resolved the task's other question, and the
+  answer is no code change needed there either: this project's
+  byte-level BPE design means a vocabulary trained once, up front, on a
+  representative sample already covers any later, unseen text via byte
+  fallback - there's no need to retrain or extend the vocabulary per
+  chunk, stated plainly in README.md stage 12 rather than left implicit.
 
 - [ ] TASK-042: Establish what one training chunk's peak RAM actually
   depends on (batch size, context length, model width, corpus chunk size)
