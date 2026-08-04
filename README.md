@@ -837,6 +837,84 @@ requires `--gpu` and trains correctly (loss values are finite, a
 checkpoint is produced) at a deliberately tiny fixture size, given how
 slow this path is.
 
+## Stage 12 — Incremental training within a fixed RAM budget
+
+*(No CLI of its own yet - a new flag, `--resume-from-checkpoint`, on the
+stage 6 pretraining CLI. Added at the user's explicit request, as an
+alternative to needing many machines with large RAM each for one big
+training run.)*
+
+**Problem it solves:** training on a corpus larger than fits in RAM at
+once usually means either more RAM or more machines. This project's
+tokeniser already avoids that for training a vocabulary (see the memory/
+disk footprint section above), but training a *model* on a corpus in
+chunks - continuing the same model checkpoint from one chunk to the next
+- was not possible until now: the pretraining CLI always built a fresh
+model and trained it from scratch.
+
+**What's happening:** `--resume-from-checkpoint <path>` (TASK-040) loads
+an existing checkpoint via `ModelCheckpoint.Load` and continues training
+it on the corpus given in the same command, instead of building a new
+model. The model's architecture (embedding dimension, layer count, head
+count, context length) comes entirely from the checkpoint and cannot be
+overridden - passing `--embedding-dim` or similar alongside
+`--resume-from-checkpoint` is an error. Run it in a loop, once per corpus
+chunk, each run resuming the previous run's output checkpoint, and the
+model file compounds across the whole sequence without ever needing the
+full corpus - or the full training run - in memory at once.
+
+**What this trades away:** total training time for RAM. Training a large
+corpus in sequential 8 GB-sized chunks on one machine takes as long as
+training it all at once would, just spread across more, smaller runs -
+it does not speed anything up, and is not a substitute for genuinely
+parallel, multi-machine training.
+
+**A known limitation, stated plainly, not hidden:** `AdamWOptimizer`'s
+per-parameter moment estimates are not part of the checkpoint file, so
+every `--resume-from-checkpoint` run restarts them from zero. The model's
+learned weights carry over correctly; the optimizer's own sense of recent
+gradient history does not. This is a deliberate scope choice for now, not
+an oversight - see TASK-040 in TASK.md.
+
+**Source files:** `src/Pretrain/PretrainCli.cs`, `src/Training/ModelCheckpoint.cs`.
+
+**Run it:**
+
+```text
+$ dotnet run -- vocab.bpe model.checkpoint chunk1.txt \
+    --embedding-dim 64 --layers 2 --heads 2 --context-length 64 --steps 30
+Bulk-encoding 1 corpus file(s)...
+Training a 2-layer, 64-dim GptModel for 30 steps (batch size 8, context length 64, ... tokens)...
+...
+Saved checkpoint to model.checkpoint.
+
+$ dotnet run -- vocab.bpe model.checkpoint chunk2.txt \
+    --resume-from-checkpoint model.checkpoint --steps 30
+Bulk-encoding 1 corpus file(s)...
+Training a 2-layer, 64-dim GptModel for 30 steps (batch size 8, context length 64, ... tokens)...
+...
+Saved checkpoint to model.checkpoint.
+```
+
+**Source files** (tests): `tests/Pretrain.Tests/PretrainCliTests.cs`.
+
+```bash
+cd tests/Pretrain.Tests && dotnet test
+```
+
+`PretrainCliTests` proves resuming continues training (weights change
+from where the first run left them, rather than restarting), keeps the
+original architecture, rejects an architecture flag combined with
+`--resume-from-checkpoint`, rejects a vocabulary that doesn't match the
+checkpoint's, and reports a clear error for a checkpoint path that
+doesn't exist.
+
+**Still to come (TASK-041/042/043, not yet done):** confirming the
+tokeniser's own RAM bound holds at a realistic large-corpus scale, working
+out what actually drives one chunk's peak RAM so a chunk size can be
+picked to fit a stated budget, and a full worked example chaining several
+chunks together with peak RAM measured throughout.
+
 ## Putting it together: training and generating from code
 
 Every stage that touches a model artifact now has a CLI (tokeniser -
@@ -1035,7 +1113,12 @@ Every stage above (1 through 11, including both optional `--optimised` and
 were deliberately made along the way. Distributed (multi-machine) training
 remains out of scope for now - not planned or tasked, though revisitable if
 asked, the same way single-GPU execution (stage 11) just was; single-GPU
-execution is no longer out of scope the way it once was.
+execution is no longer out of scope the way it once was. Stage 12
+(incremental training within a fixed RAM budget) is in progress:
+`--resume-from-checkpoint` (TASK-040) is built, tested, and runnable today;
+TASK-041/042/043 (confirming the tokeniser's RAM bound at larger scale,
+sizing a chunk to a RAM budget, and a full worked example) are not done
+yet.
 
 The caveat that used to be repeated here — that the chat CLI doesn't
 apply stage 9's prompt template or know when a response has "finished" —

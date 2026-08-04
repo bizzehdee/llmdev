@@ -1657,7 +1657,7 @@ real measurement says so.
   `TensorTests.cs`, run against the real GPU via OpenCL. Solution-wide:
   457 tests passing.
 
-- [ ] TASK-040: Add a way for `PretrainCli` to load an existing checkpoint
+- [x] TASK-040: Add a way for `PretrainCli` to load an existing checkpoint
   and continue training it on further corpus data, instead of always
   building a fresh model. This is the actual gap blocking chunked/
   compounding training (stage 12) - without it, there is no way to train
@@ -1679,6 +1679,34 @@ real measurement says so.
   match the loaded checkpoint's own architecture - mismatch is a clear
   CLI error, not a silent reshape or crash.
   Required by: TASK-043
+
+  **Done:** `--resume-from-checkpoint <path>` loads the checkpoint via
+  the existing `ModelCheckpoint.Load` (which already reconstructs the
+  full architecture, including `MaxSequenceLength`) instead of building a
+  fresh `GptModel`. Resolved the open question directly, not assumed:
+  `ModelCheckpoint`'s binary format only ever wrote model weights, never
+  `AdamWOptimizer`'s moment estimates - confirmed by reading
+  `ModelCheckpoint.Save`/`Load` before writing a line of new code.
+  Decided **not** to add moment state to the checkpoint format in this
+  task (would mean a binary format version bump and real added
+  complexity for a toy-scale demo project) - `--resume-from-checkpoint`
+  restarts AdamW's moments from zero on every resume, stated explicitly
+  in the CLI's own `--help` text and in README.md stage 12, not left as
+  a silent gap. `--embedding-dim`/`--layers`/`--heads`/`--context-length`
+  are rejected outright (not merely ignored) when combined with
+  `--resume-from-checkpoint`, via explicit "was this flag specified"
+  tracking added to the existing arg-parsing loop, since the checkpoint's
+  own architecture is the only one that can apply. A loaded checkpoint's
+  `VocabSize` is checked against the freshly-loaded tokeniser's own
+  `VocabSize` and rejected with a clear error on mismatch - a checkpoint
+  and a vocabulary from different tokenisers would otherwise silently
+  misalign token IDs to embeddings.
+  Tests (`PretrainCliTests.cs`): resuming continues training (first
+  parameter's values differ from the original run's, proving it isn't
+  silently restarting) while keeping the original architecture; combining
+  `--resume-from-checkpoint` with an architecture flag errors clearly;
+  a mismatched vocabulary errors clearly; a nonexistent checkpoint path
+  errors clearly. Solution-wide: 461 tests passing.
 
 - [ ] TASK-041: Measure whether `BpeTokeniser.Train`'s existing disk-backed,
   scratch-bounded design (TASK-029) genuinely holds its RAM bound at a

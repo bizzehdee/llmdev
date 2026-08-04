@@ -9,16 +9,23 @@ public class PretrainCliTests
     private static readonly string ScratchDirectory = Path.Combine(Path.GetTempPath(), "pretrain-tests-scratch");
     private static readonly string VocabPath = Path.Combine(ScratchDirectory, "fixture-vocab.bpe");
     private static readonly string CorpusPath = Path.Combine(ScratchDirectory, "fixture-corpus.txt");
+    private static readonly string SecondCorpusPath = Path.Combine(ScratchDirectory, "fixture-corpus-2.txt");
+    private static readonly string MismatchedVocabPath = Path.Combine(ScratchDirectory, "fixture-vocab-mismatched.bpe");
 
     static PretrainCliTests()
     {
         Directory.CreateDirectory(ScratchDirectory);
 
         File.WriteAllText(CorpusPath, string.Concat(Enumerable.Repeat("the quick brown fox jumps over the lazy dog. ", 60)));
+        File.WriteAllText(SecondCorpusPath, string.Concat(Enumerable.Repeat("she sells seashells by the seashore today. ", 60)));
 
         var tokeniser = new BpeTokeniser();
         tokeniser.Train([CorpusPath], targetVocabSize: 260, ScratchDirectory);
         tokeniser.Save(VocabPath);
+
+        var mismatchedTokeniser = new BpeTokeniser();
+        mismatchedTokeniser.Train([CorpusPath], targetVocabSize: 256, ScratchDirectory);
+        mismatchedTokeniser.Save(MismatchedVocabPath);
     }
 
     private static (int exitCode, string stdout, string stderr) Run(params string[] args)
@@ -288,5 +295,92 @@ public class PretrainCliTests
             Tensor.Tensor.Backend = Tensor.TensorBackend.Scalar;
             Tensor.GpuContext.Shutdown();
         }
+    }
+
+    // TASK-040: --resume-from-checkpoint.
+
+    [Fact]
+    public void Run_ResumeFromCheckpoint_ContinuesTrainingKeepingTheOriginalArchitecture()
+    {
+        string firstCheckpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        string resumedCheckpointPath = Path.Combine(ScratchDirectory, $"resumed-{Guid.NewGuid():N}.checkpoint");
+
+        var first = Run(
+            VocabPath, firstCheckpointPath, CorpusPath,
+            "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+            "--steps", "20", "--batch-size", "4", "--learning-rate", "0.01", "--weight-decay", "0",
+            "--scratch-dir", ScratchDirectory);
+        Assert.Equal(0, first.exitCode);
+
+        var resumed = Run(
+            VocabPath, resumedCheckpointPath, SecondCorpusPath,
+            "--resume-from-checkpoint", firstCheckpointPath,
+            "--steps", "20", "--batch-size", "4", "--learning-rate", "0.01", "--weight-decay", "0",
+            "--scratch-dir", ScratchDirectory);
+
+        Assert.Equal(0, resumed.exitCode);
+        Assert.Empty(resumed.stderr);
+        Assert.True(File.Exists(resumedCheckpointPath));
+
+        var original = ModelCheckpoint.Load(firstCheckpointPath);
+        var continued = ModelCheckpoint.Load(resumedCheckpointPath);
+        Assert.Equal(original.EmbeddingDim, continued.EmbeddingDim);
+        Assert.Equal(original.NumLayers, continued.NumLayers);
+        Assert.Equal(original.NumHeads, continued.NumHeads);
+        Assert.Equal(original.MaxSequenceLength, continued.MaxSequenceLength);
+
+        // Weights should have moved from where the first run left them -
+        // proof this actually continued training rather than silently
+        // starting fresh and discarding the resumed architecture's values.
+        var originalFirstParam = original.Parameters()[0].Value.ToArray();
+        var continuedFirstParam = continued.Parameters()[0].Value.ToArray();
+        Assert.NotEqual(originalFirstParam, continuedFirstParam);
+    }
+
+    [Fact]
+    public void Run_ResumeFromCheckpointWithArchitectureFlag_ReturnsClearError()
+    {
+        string checkpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        var setup = Run(
+            VocabPath, checkpointPath, CorpusPath,
+            "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+            "--steps", "2", "--batch-size", "2");
+        Assert.Equal(0, setup.exitCode);
+
+        var (exitCode, _, stderr) = Run(
+            VocabPath, "out.checkpoint", CorpusPath,
+            "--resume-from-checkpoint", checkpointPath, "--embedding-dim", "8");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("cannot be combined with --resume-from-checkpoint", stderr);
+    }
+
+    [Fact]
+    public void Run_ResumeFromCheckpointWithMismatchedVocab_ReturnsClearError()
+    {
+        string checkpointPath = Path.Combine(ScratchDirectory, $"trained-{Guid.NewGuid():N}.checkpoint");
+        var setup = Run(
+            VocabPath, checkpointPath, CorpusPath,
+            "--embedding-dim", "8", "--layers", "1", "--heads", "2", "--context-length", "8",
+            "--steps", "2", "--batch-size", "2");
+        Assert.Equal(0, setup.exitCode);
+
+        var (exitCode, _, stderr) = Run(
+            MismatchedVocabPath, "out.checkpoint", CorpusPath,
+            "--resume-from-checkpoint", checkpointPath);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("vocab size", stderr);
+    }
+
+    [Fact]
+    public void Run_ResumeFromNonexistentCheckpoint_ReturnsClearError()
+    {
+        var (exitCode, _, stderr) = Run(
+            VocabPath, "out.checkpoint", CorpusPath,
+            "--resume-from-checkpoint", "/nonexistent/checkpoint.bin");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Failed to load checkpoint to resume", stderr);
     }
 }

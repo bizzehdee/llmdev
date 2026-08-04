@@ -17,8 +17,10 @@ namespace Pretrain;
 /// to end: load a trained tokeniser vocab, bulk-encode the corpus
 /// (TASK-018's <see cref="BpeTokeniser.EncodeBulk"/> - the large-corpus
 /// path, not <see cref="BpeTokeniser.Encode"/>) into a
-/// <see cref="TokenCorpus"/>, build a fresh <see cref="GptModel"/> from
-/// CLI-supplied architecture flags, train it, and checkpoint the result.
+/// <see cref="TokenCorpus"/>, build a <see cref="GptModel"/> - fresh, from
+/// CLI-supplied architecture flags, or loaded from an existing checkpoint
+/// via TASK-040's <c>--resume-from-checkpoint</c> - train it, and
+/// checkpoint the result.
 /// </summary>
 public static class PretrainCli
 {
@@ -30,10 +32,23 @@ public static class PretrainCli
             stdout.WriteLine("  [--embedding-dim <n>] [--layers <n>] [--heads <n>] [--context-length <n>]");
             stdout.WriteLine("  [--steps <n>] [--batch-size <n>] [--learning-rate <f>] [--weight-decay <f>]");
             stdout.WriteLine("  [--scratch-dir <dir>] [--optimised | --gpu [--gpu-allow-cpu-fallback] [--gpu-resident-weights]]");
+            stdout.WriteLine("  [--resume-from-checkpoint <path>]");
             stdout.WriteLine();
             stdout.WriteLine("Trains a fresh GptModel from scratch on the given corpus, using a tokeniser");
             stdout.WriteLine("vocabulary already trained via the Tokeniser CLI, and saves the result as a");
             stdout.WriteLine("checkpoint. Directories are expanded to their *.txt files.");
+            stdout.WriteLine();
+            stdout.WriteLine("--resume-from-checkpoint <path> (TASK-040) loads an existing checkpoint and");
+            stdout.WriteLine("continues training it on the given corpus, instead of building a fresh model -");
+            stdout.WriteLine("the way to train on more data than fits in one run, in bounded-RAM chunks, with");
+            stdout.WriteLine("the model file compounding over successive runs (see README.md stage 12).");
+            stdout.WriteLine("The model's architecture (--embedding-dim/--layers/--heads/--context-length)");
+            stdout.WriteLine("comes from the checkpoint itself and cannot be overridden - specifying any of");
+            stdout.WriteLine("those flags together with --resume-from-checkpoint is an error, not a silent");
+            stdout.WriteLine("reshape. The optimizer's per-parameter moment estimates (AdamW's first/second");
+            stdout.WriteLine("moment) are NOT part of the checkpoint format and restart from zero on every");
+            stdout.WriteLine("resume - a deliberate, documented trade-off (see README.md stage 12), not an");
+            stdout.WriteLine("oversight.");
             stdout.WriteLine();
             stdout.WriteLine("--gpu (TASK-033) selects the ILGPU-backed matmul path and requires a genuine");
             stdout.WriteLine("CUDA/OpenCL accelerator by default - it refuses with a clear error rather than");
@@ -44,10 +59,10 @@ public static class PretrainCli
             stdout.WriteLine();
             stdout.WriteLine("--gpu-resident-weights (TASK-036, requires --gpu) keeps every model parameter");
             stdout.WriteLine("device-resident for the whole run, so a forward pass's matmuls stop re-uploading");
-            stdout.WriteLine("them every step - backward and the optimizer's update still run host-side as");
-            stdout.WriteLine("before. Off by default: whether this is actually faster depends on how often a");
-            stdout.WriteLine("step's other (non-matmul) tensor ops touch a resident parameter, which this");
-            stdout.WriteLine("project's own measurements found is not a given - see README.md stage 11.");
+            stdout.WriteLine("them every step - backward and the optimizer's update run their own");
+            stdout.WriteLine("device-resident kernels too (TASK-037/038/039), but measured slower than the");
+            stdout.WriteLine("non-resident path at this project's toy model sizes, not faster - off by");
+            stdout.WriteLine("default because of this. See README.md stage 11.");
             return 1;
         }
 
@@ -61,6 +76,8 @@ public static class PretrainCli
         bool gpu = false;
         bool gpuAllowCpuFallback = false;
         bool gpuResidentWeights = false;
+        string? resumeFromCheckpointPath = null;
+        bool embeddingDimSpecified = false, layersSpecified = false, headsSpecified = false, contextLengthSpecified = false;
 
         var positionalArgs = new List<string>();
         for (int i = 2; i < args.Length; i++)
@@ -69,18 +86,26 @@ public static class PretrainCli
             {
                 case "--embedding-dim" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedEmbeddingDim):
                     embeddingDim = parsedEmbeddingDim;
+                    embeddingDimSpecified = true;
                     i++;
                     break;
                 case "--layers" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedLayers):
                     layers = parsedLayers;
+                    layersSpecified = true;
                     i++;
                     break;
                 case "--heads" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedHeads):
                     heads = parsedHeads;
+                    headsSpecified = true;
                     i++;
                     break;
                 case "--context-length" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedContextLength):
                     contextLength = parsedContextLength;
+                    contextLengthSpecified = true;
+                    i++;
+                    break;
+                case "--resume-from-checkpoint" when i + 1 < args.Length:
+                    resumeFromCheckpointPath = args[i + 1];
                     i++;
                     break;
                 case "--steps" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedSteps):
@@ -141,6 +166,13 @@ public static class PretrainCli
         if (gpuResidentWeights && !gpu)
         {
             stderr.WriteLine("--gpu-resident-weights only makes sense together with --gpu.");
+            return 1;
+        }
+
+        if (resumeFromCheckpointPath is not null && (embeddingDimSpecified || layersSpecified || headsSpecified || contextLengthSpecified))
+        {
+            stderr.WriteLine("--embedding-dim/--layers/--heads/--context-length cannot be combined with " +
+                "--resume-from-checkpoint - the model's architecture comes from the checkpoint itself.");
             return 1;
         }
 
@@ -209,20 +241,49 @@ public static class PretrainCli
             Tensor.Tensor.Backend = TensorBackend.Gpu;
         }
 
+        GptModel model;
+        if (resumeFromCheckpointPath is not null)
+        {
+            // TASK-040: continue an existing checkpoint rather than
+            // starting fresh - the architecture (including context
+            // length/MaxSequenceLength) comes entirely from the
+            // checkpoint, validated above to not be overridden. AdamW's
+            // moment estimates are NOT part of the checkpoint format and
+            // restart from zero here - a deliberate, documented trade-off
+            // (see README.md stage 12), not an oversight.
+            try
+            {
+                model = ModelCheckpoint.Load(resumeFromCheckpointPath);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException)
+            {
+                stderr.WriteLine($"Failed to load checkpoint to resume: {ex.Message}");
+                return 1;
+            }
+            if (model.VocabSize != tokeniser.VocabSize)
+            {
+                stderr.WriteLine($"Checkpoint's vocab size ({model.VocabSize}) doesn't match the loaded tokeniser's ({tokeniser.VocabSize}) - they must come from the same tokeniser.");
+                return 1;
+            }
+            contextLength = model.MaxSequenceLength;
+        }
+        else
+        {
+            model = new GptModel(
+                vocabSize: tokeniser.VocabSize,
+                embeddingDim: embeddingDim,
+                numLayers: layers,
+                numHeads: heads,
+                maxSequenceLength: contextLength);
+        }
+
         stdout.WriteLine($"Bulk-encoding {corpusFiles.Count} corpus file(s)...");
         using var encoded = tokeniser.EncodeBulk(corpusFiles, scratchDirectory);
         using var corpus = new TokenCorpus(encoded, scratchDirectory);
         var sampler = new BatchSampler(corpus, contextLength);
 
-        stdout.WriteLine($"Training a {layers}-layer, {embeddingDim}-dim GptModel for {steps} steps " +
+        stdout.WriteLine($"Training a {model.NumLayers}-layer, {model.EmbeddingDim}-dim GptModel for {steps} steps " +
             $"(batch size {batchSize}, context length {contextLength}, {corpus.Length} tokens)...");
-
-        var model = new GptModel(
-            vocabSize: tokeniser.VocabSize,
-            embeddingDim: embeddingDim,
-            numLayers: layers,
-            numHeads: heads,
-            maxSequenceLength: contextLength);
 
         if (gpuResidentWeights)
         {
@@ -230,9 +291,10 @@ public static class PretrainCli
             // in place (Tensor.MoveToGpuInPlace) - a forward pass's matmuls
             // then use each weight's existing device view directly
             // (TASK-035) instead of re-uploading it every step. Backward
-            // and the optimizer's update below still run host-side
-            // unchanged; see this flag's own --help text for why that's a
-            // deliberate scope choice, not an oversight.
+            // and the optimizer's update below run their own
+            // device-resident kernels too (TASK-037/038/039), but measured
+            // slower overall, not faster - see this flag's own --help text
+            // and README.md stage 11.
             foreach (var parameter in model.Parameters())
             {
                 parameter.Value.MoveToGpuInPlace();
