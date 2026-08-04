@@ -917,10 +917,14 @@ per chunk isn't needed at all: this project's tokeniser is byte-level BPE,
 so a vocabulary trained once, up front, on a representative sample already
 covers any later, unseen text via byte fallback.
 
-**Still to come (TASK-042/043, not yet done):** working out what actually
-drives one training chunk's peak RAM so a chunk size can be picked to fit
-a stated budget, and a full worked example chaining several chunks
-together with peak RAM measured throughout.
+**TASK-042 (done):** measured what actually drives one training chunk's
+peak RAM - corpus chunk size, by far, then context length; batch size and
+model width barely moved it at this project's toy scale. See the memory/
+disk footprint section below for the numbers and the practical guidance
+they give for sizing a chunk to a budget.
+
+**Still to come (TASK-043, not yet done):** a full worked example chaining
+several chunks together with peak RAM measured throughout.
 
 ## Putting it together: training and generating from code
 
@@ -1076,15 +1080,64 @@ machine's RAM usage right to its limit just to extend a table further
 isn't a reasonable trade for that portion of it.
 
 **Stage 6 (pretraining)** - same small 4-layer, 128-dim model architecture
-each time, using the vocab/corpus from the matching row above (100 MB
-skipped here - a full training run at that size takes long enough that the
-tokeniser-training numbers above already make the point):
+each time, using the vocab/corpus from the matching row above:
 
 | Input text | Tokens | Disk (token corpus) | Peak RAM | `model.checkpoint` output |
 |---|---|---|---|---|
 | 2.0 MB | 502,147 | ~1.9 MB | ~279 MB | 3.3 MB |
 | 4.0 MB | 1,004,276 | ~3.8 MB | ~239 MB | 3.3 MB |
 | 10.0 MB | 2,510,680 | ~9.6 MB | ~324 MB | 3.3 MB |
+| 50.0 MB | 10,386,801 | ~40 MB | ~966 MB | 3.3 MB |
+| 100.0 MB | 20,773,601 | ~79 MB | ~1.83 GB | 3.3 MB |
+
+**TASK-042 added the last two rows** (previously skipped: "a full training
+run at that size takes long enough that the tokeniser-training numbers
+already make the point" - true for training itself, but not for peak RAM,
+which is worth its own data point). Peak RAM tracks corpus size closely at
+this size, and closely matches the *tokeniser's* own 16-bytes-per-input-byte
+formula (50 MB → ~800 MB predicted, ~966 MB measured; 100 MB → ~1.6 GB
+predicted, ~1.83 GB measured) - because `PretrainCli` bulk-encodes the
+corpus via the same `BpeTokeniser.EncodeBulk` path stage 1's training uses
+internally, before training itself ever starts. **This is the single
+biggest lever for keeping a training chunk within a RAM budget**: at this
+project's toy model sizes, a large corpus chunk's own encoding cost
+dominates everything the model or training loop itself does. Extrapolating
+from this same mechanism (not independently re-measured, to avoid pushing
+this development machine's RAM right to its limit twice for the same
+underlying cost) - a 400 MB corpus chunk would cost roughly the ~7.8 GB the
+tokeniser-training table above already measured for 400 MB, since both go
+through the same encoding path.
+
+**What else drives peak RAM, holding a fixed 5 MB corpus chunk and
+sweeping one architecture parameter at a time from the same 4-layer,
+128-dim, batch size 8, context length 64 baseline (~246 MB):**
+
+| Change from baseline | Peak RAM |
+|---|---|
+| *(baseline)* | ~246 MB |
+| Batch size 8 → 32 | ~245 MB (no meaningful change) |
+| Batch size 8 → 2 | ~237 MB (no meaningful change) |
+| Context length 64 → 256 | ~776 MB |
+| Embedding dim 128 → 256 | ~306 MB |
+| Layers 4 → 8 | ~286 MB |
+
+Batch size barely moved peak RAM at this scale - the fixed cost of the
+.NET runtime, the (still tiny) model, and the optimizer's moment estimates
+dwarfs the extra activation memory a bigger batch adds when the model
+itself is this small. Context length is a different story: a 4× increase
+(64 → 256) added over 500 MB, far more than the same 4× increase in batch
+size, because attention's activation memory grows with the *square* of
+context length (one score per token-pair, per head, per batch item), not
+linearly the way batch size does. Model width (embedding dim) and depth
+(layer count) each added a modest amount, roughly proportional to the
+extra parameters and optimizer moment state they bring - real, but small
+next to what a large corpus chunk or a long context length can cost.
+**Practical guidance this gives for sizing a chunk to a RAM budget:**
+corpus chunk size is the dominant lever by far; after that, context length
+matters more than batch size or model width at these toy sizes - though a
+genuinely large model would likely shift that balance, since parameter and
+optimizer-state memory scales with model size in a way this project's toy
+demos don't reach.
 
 The disk-scratch figures aren't estimates for this table specifically -
 they're the exact numbers `TokeniserCli` itself prints before training
@@ -1144,9 +1197,11 @@ execution is no longer out of scope the way it once was. Stage 12
 `--resume-from-checkpoint` (TASK-040) is built, tested, and runnable
 today, and TASK-041 confirmed the tokeniser's own RAM bound holds at
 200 MB/400 MB, and that retraining the vocabulary per chunk isn't needed
-at all (byte-level BPE already generalises to unseen text). TASK-042/043
-(sizing a training chunk to a RAM budget, and a full worked example
-chaining several chunks together) are not done yet.
+at all (byte-level BPE already generalises to unseen text). TASK-042
+measured what actually drives one training chunk's peak RAM (corpus chunk
+size dominates, well ahead of context length, batch size, or model
+width). TASK-043 (a full worked example chaining several chunks together)
+is not done yet.
 
 The caveat that used to be repeated here — that the chat CLI doesn't
 apply stage 9's prompt template or know when a response has "finished" —

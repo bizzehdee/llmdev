@@ -1749,7 +1749,7 @@ real measurement says so.
   fallback - there's no need to retrain or extend the vocabulary per
   chunk, stated plainly in README.md stage 12 rather than left implicit.
 
-- [ ] TASK-042: Establish what one training chunk's peak RAM actually
+- [x] TASK-042: Establish what one training chunk's peak RAM actually
   depends on (batch size, context length, model width, corpus chunk size)
   for this project's model sizes, measured directly rather than assumed,
   so a real demo can size a corpus chunk to a stated RAM budget (the
@@ -1759,6 +1759,34 @@ real measurement says so.
   a chunk size for their own machine.
   Depends on: TASK-040
   Required by: TASK-043
+
+  **Done - corpus chunk size dominates, by far, then context length:**
+  measured with `/usr/bin/time -v` against a fixed 4-layer, 128-dim,
+  batch size 8, context length 64 baseline (~246 MB peak RAM on a 5 MB
+  corpus), sweeping one variable at a time. Extended the existing
+  memory/disk footprint section's pretraining table to 50 MB (~966 MB) and
+  100 MB (~1.83 GB) corpora - previously skipped there as "the
+  tokeniser-training numbers already make the point," which turned out to
+  be true for a specific reason worth stating rather than assuming:
+  `PretrainCli` bulk-encodes its corpus via the same `BpeTokeniser.EncodeBulk`
+  path stage 1 uses internally, so pretraining's peak RAM at a given
+  corpus size tracks the *tokeniser's* own 16-bytes-per-input-byte formula
+  almost exactly, before training itself even starts. Batch size (8 → 32,
+  8 → 2) moved peak RAM by only a few MB either way - negligible against
+  the fixed cost of the .NET runtime, this toy-sized model, and the
+  optimizer's moment estimates. Context length (64 → 256, same 4× factor
+  as the batch size sweep) added over 500 MB - because attention's
+  activation memory grows with context length *squared* (one score per
+  token pair, per head, per batch item), not linearly the way batch size
+  does; this asymmetry (identical 4× factor, wildly different RAM impact)
+  is the finding worth stating explicitly, not just the raw numbers.
+  Embedding dim (128 → 256) and layer count (4 → 8) each added a modest,
+  roughly parameter-proportional amount. Practical guidance written into
+  README.md: corpus chunk size is the chunk-sizing decision that matters
+  most by far, then context length; batch size and model width barely
+  register at this project's toy scale, though a genuinely large model
+  would likely shift that balance. No code change - this task was
+  measurement and documentation only.
 
 - [ ] TASK-043: Demonstrate the full chunked/compounding pipeline
   end-to-end: split a real corpus into several chunks sized per TASK-042's
