@@ -31,12 +31,12 @@ Two different kinds of section follow, and it matters which is which:
   (a trained vocabulary, a checkpoint) and are things you actually *run*.
   Every one of these includes a real example command and the real output it
   produced when this README was written.
-- **Stages without a CLI** (2–5, 7, 8, 11) are learning steps: library code
-  with no standalone command of its own, exercised only by tests and by the
-  CLI stages above/after them (8 and 11 are flags on those CLIs, not
-  learning steps in the usual sense, but still nothing you run standalone).
-  Understanding what they do is what makes the CLI stages make sense, but
-  there's nothing new to *run* for them beyond
+- **Stages without a CLI** (2–5, 7, 8, 11, 12) are learning steps: library
+  code with no standalone command of its own, exercised only by tests and
+  by the CLI stages above/after them (8, 11, and 12 are flags on those
+  CLIs, not learning steps in the usual sense, but still nothing you run
+  standalone). Understanding what they do is what makes the CLI stages
+  make sense, but there's nothing new to *run* for them beyond
   `dotnet test`.
 
 ## Requirements
@@ -923,8 +923,77 @@ model width barely moved it at this project's toy scale. See the memory/
 disk footprint section below for the numbers and the practical guidance
 they give for sizing a chunk to a budget.
 
-**Still to come (TASK-043, not yet done):** a full worked example chaining
-several chunks together with peak RAM measured throughout.
+**TASK-043 (done) - the full pipeline, chained end to end:** three real,
+distinct corpus chunks (~800 KB each, different repeated sentences so it's
+obvious each chunk's content is genuinely different, not the same text
+split arbitrarily), a vocabulary trained once on chunk 1 only (per
+TASK-041's finding, not retrained for chunks 2/3), and three separate
+`Pretrain` runs chained with `--resume-from-checkpoint`, each measured with
+`/usr/bin/time -v`:
+
+```bash
+vocab=vocab.bpe; scratch=./scratch
+
+# Vocabulary trained once, up front, on a representative sample only.
+dotnet run --project src/Tokeniser -- 500 chunk1.txt --scratch-dir "$scratch"
+mv vocab.bpe "$vocab"
+
+# Chunk 1: fresh model.
+dotnet run --project src/Pretrain -- "$vocab" model.checkpoint chunk1.txt \
+    --embedding-dim 32 --layers 2 --heads 2 --context-length 32 \
+    --steps 40 --batch-size 4 --learning-rate 0.01 --scratch-dir "$scratch"
+
+# Chunk 2, 3, ...: resume the same checkpoint file, one chunk at a time.
+for chunk in chunk2.txt chunk3.txt; do
+    dotnet run --project src/Pretrain -- "$vocab" model.checkpoint "$chunk" \
+        --resume-from-checkpoint model.checkpoint \
+        --steps 40 --batch-size 4 --learning-rate 0.01 --scratch-dir "$scratch"
+done
+```
+
+A plain shell loop, not a dedicated orchestrating CLI - PLAN.md flagged
+this as an open question, resolved here: the actual gap was
+`--resume-from-checkpoint` itself, not the looping around it, and nothing
+in this demo needed more than the shell already gives for free.
+
+| Chunk | Resumed from | Peak RAM | Loss (first → last step) |
+|---|---|---|---|
+| 1 | *(fresh model)* | ~219 MB | 5.80 → 0.34 |
+| 2 | chunk 1's checkpoint | ~218 MB | 10.89 → 2.50 |
+| 3 | chunk 2's checkpoint | ~217 MB | 6.78 → 3.20 |
+
+**Peak RAM stayed flat across all three runs, regardless of how many
+chunks came before** - the whole point: each run is a separate process
+that only ever holds one chunk and the model in memory, never the full
+multi-chunk corpus or a multi-chunk training run's combined state. A
+tenth chunk would cost the same as the first. Chunk 2's *first-step* loss
+(10.89) is higher than chunk 1's own starting point would have been -
+expected, not a bug: 40 steps on chunk 1's highly repetitive text drove
+the loss very low against *that* text specifically, and chunk 2's
+different content initially looks unfamiliar to those same weights,
+before continued training brings the loss back down. Bulk-encoding chunks
+2 and 3 succeeded without errors even though the vocabulary was only ever
+trained on chunk 1 - direct, practical confirmation of TASK-041's byte
+-fallback claim, not just a claim taken on faith. Generating from the
+final, three-chunk-compounded checkpoint works end to end (loads,
+produces output, doesn't crash) - the toy model size and step count used
+here mean the output itself is not fluent text, consistent with every
+other toy-scale demo in this README.
+
+**The trade-off this makes, stated as plainly as stage 11's own GPU
+findings:** wall-clock time for RAM, not a distributed/parallel
+alternative. Training N chunks sequentially on one machine takes as long
+as training all of them at once would (each chunk's own training time,
+summed) - it does not train faster, only within a smaller RAM footprint
+per step. Sizing a chunk in practice: see the memory/disk footprint
+section above for what actually drives peak RAM (corpus chunk size, by
+far) and pick a chunk size accordingly for a given budget.
+
+**Source files** (tests): `tests/Pretrain.Tests/PretrainCliTests.cs`
+(`--resume-from-checkpoint` itself, per TASK-040 above - this demo chains
+real CLI runs rather than adding new automated tests of its own, since
+what TASK-043 needed to prove was a real, measured wall-clock/RAM result,
+not new code).
 
 ## Putting it together: training and generating from code
 
@@ -1185,7 +1254,7 @@ place, and now genuinely does.
 
 ## Project status
 
-Every stage above (1 through 11, including both optional `--optimised` and
+Every stage above (1 through 12, including both optional `--optimised` and
 `--gpu` backends) is built, tested, and runnable today — see
 [TASK.md](TASK.md) for the task-by-task history and [PLAN.md](PLAN.md)'s
 "Known limitations / deferred" section for the trade-offs (not bugs) that
@@ -1193,15 +1262,16 @@ were deliberately made along the way. Distributed (multi-machine) training
 remains out of scope for now - not planned or tasked, though revisitable if
 asked, the same way single-GPU execution (stage 11) just was; single-GPU
 execution is no longer out of scope the way it once was. Stage 12
-(incremental training within a fixed RAM budget) is in progress:
+(incremental training within a fixed RAM budget) is now complete:
 `--resume-from-checkpoint` (TASK-040) is built, tested, and runnable
 today, and TASK-041 confirmed the tokeniser's own RAM bound holds at
 200 MB/400 MB, and that retraining the vocabulary per chunk isn't needed
 at all (byte-level BPE already generalises to unseen text). TASK-042
 measured what actually drives one training chunk's peak RAM (corpus chunk
 size dominates, well ahead of context length, batch size, or model
-width). TASK-043 (a full worked example chaining several chunks together)
-is not done yet.
+width). TASK-043 chained three real corpus chunks end to end via a
+documented shell loop and confirmed peak RAM stays flat regardless of how
+many chunks came before - stage 12 is now complete.
 
 The caveat that used to be repeated here — that the chat CLI doesn't
 apply stage 9's prompt template or know when a response has "finished" —

@@ -399,30 +399,29 @@ rather than assuming it fits in RAM:
     at all today, regardless of RAM. Closing this is the core of this
     stage; everything else here is measurement and packaging around it.
 
-    **Open questions a real implementation needs to resolve, not
-    pre-decided here:**
+    **Open questions, and how TASK-040 through TASK-043 resolved each one:**
     - Whether the existing bounded-RAM tokeniser training genuinely holds
-      at a realistic large-corpus scale (hundreds of MB to low GB combined
-      across many files in one `Train` call), not just the sizes already
-      measured in the footprint section - measure before assuming it
-      scales further just because the design is disk-backed.
+      at a realistic large-corpus scale - **yes**, measured (not assumed)
+      at 200 MB and 400 MB, both within a few percent of the existing
+      16-bytes-per-input-byte formula (TASK-041).
     - Whether the optimizer's own state (`AdamWOptimizer`'s per-parameter
-      moment estimates) round-trips correctly through a checkpoint
-      save/load cycle, or whether resuming a run today silently restarts
-      the optimizer's moments from zero - this changes training dynamics
-      even if the model weights themselves carry over correctly, and needs
-      to be checked, not assumed either way.
-    - What "one chunk's worth of RAM" actually depends on for this
-      project's toy-to-real model sizes (batch size, context length, model
-      width) versus corpus chunk size, so a real demo can size chunks to a
-      stated RAM budget rather than guessing.
-    - Whether a single orchestrating CLI (looping over chunks itself) or a
-      documented shell-level loop calling the existing `Pretrain` CLI
-      repeatedly is the right shape - leaning toward the latter unless a
-      real need for the former turns up, since the underlying capability
-      (resume-and-continue) is the actual gap, not the looping itself.
+      moment estimates) round-trips through a checkpoint save/load cycle -
+      **no, confirmed by reading the format, not assumed**: `ModelCheckpoint`
+      only ever wrote model weights. Decided not to add moment state to
+      the checkpoint format (real added complexity for a toy-scale demo
+      project) - resuming restarts AdamW's moments from zero, documented
+      explicitly rather than left as a silent gap (TASK-040).
+    - What "one chunk's worth of RAM" actually depends on - **corpus chunk
+      size, by far, then context length (quadratic, via attention); batch
+      size and model width barely moved it at this project's toy scale**,
+      measured with a one-variable-at-a-time sweep (TASK-042).
+    - Orchestrating CLI vs. a documented shell loop - **the shell loop**,
+      confirmed sufficient by actually building the three-chunk demo with
+      one: the underlying gap really was just `--resume-from-checkpoint`
+      itself, nothing more (TASK-043).
 
-    See TASK-040 through TASK-043 for how this is broken down.
+    Stage 12 is complete - see README.md's own stage 12 section for the
+    full worked example and numbers.
 
 ## Documentation (TASK-023)
 README.md is due a rewrite into a lesson plan: one section per stage

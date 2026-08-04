@@ -1788,7 +1788,7 @@ real measurement says so.
   would likely shift that balance. No code change - this task was
   measurement and documentation only.
 
-- [ ] TASK-043: Demonstrate the full chunked/compounding pipeline
+- [x] TASK-043: Demonstrate the full chunked/compounding pipeline
   end-to-end: split a real corpus into several chunks sized per TASK-042's
   guidance, train a tokeniser vocabulary once up front (per TASK-041's
   finding), then train sequentially - first chunk from scratch, each
@@ -1804,6 +1804,35 @@ real measurement says so.
   distributed/parallel alternative) stated as plainly as stage 11's own
   GPU findings were.
   Depends on: TASK-040, TASK-041, TASK-042
+
+  **Done - stage 12 is complete:** three real, distinct ~800 KB corpus
+  chunks (different repeated sentences, so it's obvious each chunk's
+  content genuinely differs), a vocabulary trained once on chunk 1 only,
+  and three chained `Pretrain` runs (fresh, then `--resume-from-checkpoint`
+  twice), each measured with `/usr/bin/time -v`. Peak RAM: ~219 MB,
+  ~218 MB, ~217 MB across the three runs - flat regardless of position in
+  the sequence, confirming the core claim directly rather than just
+  arguing it from the mechanism: a run's RAM depends on the chunk it's
+  given, not on how many chunks came before. Resolved PLAN.md's open
+  question in favour of a documented shell loop over the existing
+  `Pretrain` CLI, not a new orchestrating CLI - the actual gap this whole
+  line of work closed was `--resume-from-checkpoint` (TASK-040) itself,
+  and nothing in this demo needed more than a shell `for` loop already
+  gives for free. Bulk-encoding chunks 2 and 3 succeeded without errors
+  even though the vocabulary was only ever trained on chunk 1 - direct
+  confirmation of TASK-041's byte-fallback claim in practice, not just
+  restated from theory. Noted, not hidden: chunk 2's first-step loss was
+  higher than chunk 1's own final loss, because 40 steps on chunk 1's
+  repetitive text drove the loss very low against that specific text,
+  and chunk 2's different content initially looked unfamiliar to those
+  same weights - expected given this toy step count, not a defect in
+  resuming. Generated text from the final, three-chunk-compounded
+  checkpoint end to end (loads, produces output, doesn't crash) - not
+  fluent, consistent with every other toy-scale demo in this README.
+  Documented in README.md stage 12 with the full commands, table, and
+  trade-off. No new automated tests: this task's job was a real, measured
+  result chaining existing, already-tested pieces (TASK-040's
+  `--resume-from-checkpoint`), not new code.
 
 ## Notes
 - Tasks are scoped for hand-rolled, no-library implementation per PLAN.md,
